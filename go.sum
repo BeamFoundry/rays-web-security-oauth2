@@ -4,8 +4,8 @@ github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 h1:He8af
 github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6/go.mod h1:8o94RPi1/7XTJvwPpRSzSUedZrtlirdB3r9Z20bi2f8=
 github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c h1:udKWzYgxTojEKWjV8V+WSxDXJ4NFATAsZjh8iIbsQIg=
 github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
-github.com/BeamFoundry/rays v0.2.0 h1:wNf8jh0mrqOFIr3hLGew7OMvPPfwSr83SHOpH3cH/Gc=
-github.com/BeamFoundry/rays v0.2.0/go.mod h1:5wiQwphroNUY4tWjLrKjoV4B/pHb4ldh8XUFSFnzvQo=
+github.com/BeamFoundry/rays v0.3.0 h1:cNAkHcIRfBbHEj9ZhJl0VOw5cft8jdA+y8R5h1/qGUc=
+github.com/BeamFoundry/rays v0.3.0/go.mod h1:5wiQwphroNUY4tWjLrKjoV4B/pHb4ldh8XUFSFnzvQo=
 github.com/BeamFoundry/rays-web-security v0.2.0 h1:BUaVcVjwKQA2v4OZSiJhcKN38R1+IUS0jikAjJf/DmA=
 github.com/BeamFoundry/rays-web-security v0.2.0/go.mod h1:jBpVb4H4uZtL4q81PZGLqa82seSW64lbeh4MOTIevGg=
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=

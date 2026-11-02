@@ -1,0 +1,86 @@
+{
+  "id": "rays-realm",
+  "realm": "rays-realm",
+  "enabled": true,
+  "sslRequired": "none",
+  "roles": {
+    "realm": [
+      {
+        "name": "ROLE_USER",
+        "description": "Standard user role"
+      },
+      {
+        "name": "ROLE_ADMIN",
+        "description": "Administrator role"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@beamfoundry.fr",
+      "firstName": "Alice",
+      "lastName": "Beamy",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alicepassword",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "ROLE_USER",
+        "ROLE_ADMIN"
+      ]
+    },
+    {
+      "username": "bob",
+      "email": "bob@beamfoundry.fr",
+      "firstName": "Bob",
+      "lastName": "Beamy",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bobpassword",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "ROLE_USER"
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "rays-service-client",
+      "name": "Rays Service Client",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "service-client-secret",
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": false,
+      "publicClient": false,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "rays-web-client",
+      "name": "Rays Web Client",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "web-client-secret",
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "*"
+      ]
+    }
+  ]
+}

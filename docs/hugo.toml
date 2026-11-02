@@ -1,0 +1,9 @@
+baseURL = 'https://rays.bfdy.dev/rays-web-security-oauth2/'
+languageCode = 'en-us'
+title = 'BeamFoundry Rays OAuth2'
+theme = 'github.com/alex-shpak/hugo-book'
+
+[params]
+  BookLogo = ''
+  BookSection = 'docs'
+  BookTheme = 'auto'

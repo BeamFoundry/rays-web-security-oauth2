@@ -1,0 +1,116 @@
+package resourceserver
+
+import (
+	"strings"
+
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
+	. "github.com/BeamFoundry/rays-web-security/pkg/core"
+	. "github.com/BeamFoundry/rays/pkg/lang"
+)
+
+// JwtAuthenticationConverter converts a decoded JWT into an authenticated Authentication
+type JwtAuthenticationConverter interface {
+	Convert(token *Jwt) (*JwtAuthenticationToken, Error)
+}
+
+// DefaultJwtAuthenticationConverter is the default implementation of JwtAuthenticationConverter
+type DefaultJwtAuthenticationConverter struct {
+	principalClaimName string
+	authorityPrefix    string
+	authoritiesClaims  []string
+}
+
+func (this DefaultJwtAuthenticationConverter) New() *DefaultJwtAuthenticationConverter {
+	this.principalClaimName = "sub"
+	this.authorityPrefix = "SCOPE_"
+	this.authoritiesClaims = []string{"scope", "scp", "authorities", "roles", "realm_access.roles"}
+	return &this
+}
+
+func NewDefaultJwtAuthenticationConverter() *DefaultJwtAuthenticationConverter {
+	return DefaultJwtAuthenticationConverter{}.New()
+}
+
+func (this *DefaultJwtAuthenticationConverter) WithPrincipalClaimName(name string) *DefaultJwtAuthenticationConverter {
+	this.principalClaimName = name
+	return this
+}
+
+func (this *DefaultJwtAuthenticationConverter) WithAuthorityPrefix(prefix string) *DefaultJwtAuthenticationConverter {
+	this.authorityPrefix = prefix
+	return this
+}
+
+func (this *DefaultJwtAuthenticationConverter) WithAuthoritiesClaims(claims ...string) *DefaultJwtAuthenticationConverter {
+	this.authoritiesClaims = claims
+	return this
+}
+
+func getClaimValue(claims map[string]any, path string) (any, bool) {
+	if val, ok := claims[path]; ok {
+		return val, true
+	}
+	if strings.Contains(path, ".") {
+		parts := strings.Split(path, ".")
+		var current any = claims
+		for _, part := range parts {
+			m, ok := current.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			current, ok = m[part]
+			if !ok {
+				return nil, false
+			}
+		}
+		return current, true
+	}
+	return nil, false
+}
+
+func (this *DefaultJwtAuthenticationConverter) Convert(token *Jwt) (*JwtAuthenticationToken, Error) {
+	authorities := make([]GrantedAuthority, 0)
+
+	addAuth := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if strings.HasPrefix(s, "ROLE_") || strings.HasPrefix(s, "SCOPE_") || this.authorityPrefix == "" {
+			authorities = append(authorities, Authority(s))
+		} else {
+			authorities = append(authorities, Authority(this.authorityPrefix+s))
+		}
+	}
+
+	for _, claimKey := range this.authoritiesClaims {
+		if val, ok := getClaimValue(token.Claims, claimKey); ok {
+			switch v := val.(type) {
+			case string:
+				for part := range strings.SplitSeq(v, " ") {
+					addAuth(part)
+				}
+			case []any:
+				for _, item := range v {
+					if s, ok := item.(string); ok {
+						addAuth(s)
+					}
+				}
+			case []string:
+				for _, s := range v {
+					addAuth(s)
+				}
+			default:
+			}
+		}
+	}
+
+	principalName := token.Subject()
+	if this.principalClaimName != "sub" {
+		if customName, ok := token.Claims[this.principalClaimName].(string); ok && customName != "" {
+			principalName = customName
+		}
+	}
+
+	return JwtAuthenticationToken{}.New(token, authorities, principalName), nil
+}

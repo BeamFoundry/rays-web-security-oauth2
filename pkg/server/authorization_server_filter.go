@@ -434,6 +434,7 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorizationCodeGrant(handle
 	auth.RefreshToken = refreshToken
 	if saveErr := this.authorizationService.Save(auth); saveErr != nil {
 		saveErr.LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to save authorization")
 	}
 
 	return this.sendTokenSuccess(handler, accessToken, refreshToken)
@@ -466,6 +467,7 @@ func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handle
 	auth.AccessToken = accessToken
 	if saveErr := this.authorizationService.Save(auth); saveErr != nil {
 		saveErr.LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to save authorization")
 	}
 
 	return this.sendTokenSuccess(handler, accessToken, nil)
@@ -602,17 +604,29 @@ func (this *OAuth2AuthorizationServerFilter) handleRevoke(handler SecurityHandle
 
 	token := handler.FormValue("token")
 	if token != "" {
-		if auth, err := this.authorizationService.FindByToken(token, "access_token"); err == nil && auth != nil {
+		auth, findErr := this.authorizationService.FindByToken(token, "access_token")
+		if findErr != nil && findErr.Name() != "AuthorizationNotFound" {
+			findErr.LogError()
+			return handler.Error(http.StatusInternalServerError, "Failed to lookup token")
+		}
+		if auth != nil {
 			if auth.RegisteredClientID == client.ID || auth.RegisteredClientID == client.ClientID {
 				if rmErr := this.authorizationService.Remove(auth); rmErr != nil {
 					rmErr.LogError()
+					return handler.Error(http.StatusInternalServerError, "Failed to revoke token")
 				}
 			}
 		} else {
-			if auth, err := this.authorizationService.FindByToken(token, "refresh_token"); err == nil && auth != nil {
-				if auth.RegisteredClientID == client.ID || auth.RegisteredClientID == client.ClientID {
-					if rmErr := this.authorizationService.Remove(auth); rmErr != nil {
+			authRT, rtErr := this.authorizationService.FindByToken(token, "refresh_token")
+			if rtErr != nil && rtErr.Name() != "AuthorizationNotFound" {
+				rtErr.LogError()
+				return handler.Error(http.StatusInternalServerError, "Failed to lookup token")
+			}
+			if authRT != nil {
+				if authRT.RegisteredClientID == client.ID || authRT.RegisteredClientID == client.ClientID {
+					if rmErr := this.authorizationService.Remove(authRT); rmErr != nil {
 						rmErr.LogError()
+						return handler.Error(http.StatusInternalServerError, "Failed to revoke token")
 					}
 				}
 			}

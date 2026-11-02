@@ -101,6 +101,11 @@ func (this DefaultOidcUser) New(
 	}
 	if userInfo != nil {
 		maps.Copy(combined, userInfo.Claims)
+		if idToken != nil {
+			if sub, ok := idToken.Claims["sub"]; ok {
+				combined["sub"] = sub
+			}
+		}
 	}
 	if nameAttributeKey == "" {
 		nameAttributeKey = "sub"

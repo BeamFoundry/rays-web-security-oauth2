@@ -222,32 +222,36 @@ func (this *OAuth2LoginAuthenticationProvider) Authenticate(auth Authentication)
 
 	var authenticatedUser OAuth2User
 	if isOidc {
-		var idToken *OidcIdToken
-		if tokenResp.IdToken != "" {
-			decoder := this.getOrCreateDecoder(reg)
-
-			if decoder == nil {
-				oauthErr := OAuth2Error{
-					ErrorCode:        OAuth2ErrorServerError,
-					ErrorDescription: "missing jwt decoder or jwk_set_uri for id_token verification",
-				}
-				return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+		if tokenResp.IdToken == "" {
+			oauthErr := OAuth2Error{
+				ErrorCode:        OAuth2ErrorInvalidGrant,
+				ErrorDescription: "missing id_token in token response",
 			}
+			return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+		}
 
-			decoded, decodeErr := decoder.Decode(tokenResp.IdToken)
-			if decodeErr != nil {
-				decodeErr.LogError()
-				oauthErr := OAuth2Error{
-					ErrorCode:        OAuth2ErrorInvalidGrant,
-					ErrorDescription: fmt.Sprintf("invalid id_token: %v", decodeErr),
-				}
-				return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+		decoder := this.getOrCreateDecoder(reg)
+		if decoder == nil {
+			oauthErr := OAuth2Error{
+				ErrorCode:        OAuth2ErrorServerError,
+				ErrorDescription: "missing jwt decoder or jwk_set_uri for id_token verification",
 			}
+			return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+		}
 
-			idToken = &OidcIdToken{
-				TokenValue: tokenResp.IdToken,
-				Claims:     decoded.Claims,
+		decoded, decodeErr := decoder.Decode(tokenResp.IdToken)
+		if decodeErr != nil {
+			decodeErr.LogError()
+			oauthErr := OAuth2Error{
+				ErrorCode:        OAuth2ErrorInvalidGrant,
+				ErrorDescription: fmt.Sprintf("invalid id_token: %v", decodeErr),
 			}
+			return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+		}
+
+		idToken := &OidcIdToken{
+			TokenValue: tokenResp.IdToken,
+			Claims:     decoded.Claims,
 		}
 
 		oidcRequest := &OidcUserRequest{

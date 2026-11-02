@@ -493,6 +493,36 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(authNames).To(ContainElement("ROLE_USER"))
 			Expect(authNames).To(ContainElement("SCOPE_openid"))
 			Expect(authNames).To(ContainElement("SCOPE_email"))
+
+			// UserInfo subject mismatch rejected
+			userReqMismatch := &OidcUserRequest{
+				ClientRegistration: reg,
+				AccessToken:        token,
+				//nolint:gosec // mock token in test
+				IdToken: &OidcIdToken{
+					TokenValue: "raw.id.token",
+					Claims: map[string]any{
+						"sub": "different-sub-id",
+					},
+				},
+			}
+			_, err = oidcSvc.LoadUser(userReqMismatch)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("InvalidUserInfoResponse"))
+
+			// Missing UserInfo or IdToken subject rejected
+			userReqMissingSub := &OidcUserRequest{
+				ClientRegistration: reg,
+				AccessToken:        token,
+				//nolint:gosec // mock token in test
+				IdToken: &OidcIdToken{
+					TokenValue: "raw.id.token",
+					Claims:     map[string]any{},
+				},
+			}
+			_, err = oidcSvc.LoadUser(userReqMissingSub)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("InvalidUserInfoResponse"))
 		})
 
 		It("tests OAuth2LoginAuthenticationProvider PostConstruct, OIDC flow, and error branches", func() {
@@ -623,6 +653,34 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(oidcUser.GetIdToken()).NotTo(BeNil())
 			Expect(oidcUser.GetIdToken().TokenValue).To(Equal(rawIdToken))
 			Expect(oidcUser.GetAttributes()).To(HaveKeyWithValue("email", "alice@oidc.com"))
+
+			// 3b. Missing id_token in token response for OIDC flow returns invalid_grant error
+			noIdTokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				//nolint:gosec // mock token endpoint in test
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "oidc-at-no-id",
+					"token_type":   "Bearer",
+					"expires_in":   3600,
+					"scope":        "openid email",
+				})).To(Succeed())
+			}))
+			defer noIdTokenServer.Close()
+
+			regNoIdToken := ClientRegistrationBuilder{}.New("oidc-no-id-token").
+				ClientID("client-oidc-no-id").
+				ClientSecret("secret").
+				TokenURI(noIdTokenServer.URL).
+				Scope("openid").
+				Build()
+			loginTokenNoId := OAuth2LoginAuthenticationToken{}.New(regNoIdToken, exchange)
+			providerNoId := NewOAuth2LoginAuthenticationProvider(noIdTokenServer.Client(), nil, nil).WithJwtDecoder(decoder)
+			_, missingIdEx := providerNoId.Authenticate(loginTokenNoId)
+			Expect(missingIdEx).To(HaveOccurred())
+			oauthEx, ok := missingIdEx.(*OAuth2AuthenticationException)
+			Expect(ok).To(BeTrue())
+			Expect(oauthEx.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidGrant))
+			Expect(oauthEx.OAuth2Error().ErrorDescription).To(ContainSubstring("missing id_token"))
 
 			// 4. Reusing JWKS-backed decoder per RegistrationID
 			regJwks := ClientRegistrationBuilder{}.New("reg-jwks-reuse").

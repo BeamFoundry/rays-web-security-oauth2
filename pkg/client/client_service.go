@@ -15,15 +15,20 @@ type OAuth2AuthorizedClientService interface {
 	RemoveAuthorizedClient(registrationID, principalName string) Error
 }
 
+type authorizedClientKey struct {
+	registrationID string
+	principalName  string
+}
+
 // InMemoryOAuth2AuthorizedClientService is an in-memory implementation of OAuth2AuthorizedClientService
 type InMemoryOAuth2AuthorizedClientService struct {
 	mu      *sync.RWMutex
-	clients map[string]*OAuth2AuthorizedClient
+	clients map[authorizedClientKey]*OAuth2AuthorizedClient
 }
 
 func (this InMemoryOAuth2AuthorizedClientService) New() *InMemoryOAuth2AuthorizedClientService {
 	this.mu = &sync.RWMutex{}
-	this.clients = make(map[string]*OAuth2AuthorizedClient)
+	this.clients = make(map[authorizedClientKey]*OAuth2AuthorizedClient)
 	return &this
 }
 
@@ -31,8 +36,11 @@ func NewInMemoryOAuth2AuthorizedClientService() *InMemoryOAuth2AuthorizedClientS
 	return InMemoryOAuth2AuthorizedClientService{}.New()
 }
 
-func (this *InMemoryOAuth2AuthorizedClientService) key(regID, principal string) string {
-	return regID + "::" + principal
+func (this *InMemoryOAuth2AuthorizedClientService) key(regID, principal string) authorizedClientKey {
+	return authorizedClientKey{
+		registrationID: regID,
+		principalName:  principal,
+	}
 }
 
 func (this *InMemoryOAuth2AuthorizedClientService) LoadAuthorizedClient(registrationID, principalName string) (*OAuth2AuthorizedClient, Error) {

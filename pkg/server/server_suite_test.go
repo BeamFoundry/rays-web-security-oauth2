@@ -664,6 +664,90 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			hRevokeBad.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:wrong-secret")))
 			hRevokeBad.SetFormValue("token", "not-found-token")
 			Expect(router.Execute(hRevokeBad)).To(HaveOccurred())
+
+			// 4. Revoke returns 500 when FindByToken fails with storage error
+			failingAuthSvc := &testMockFailingAuthorizationService{
+				OAuth2AuthorizationService: authService,
+				failFindByToken:            true,
+			}
+			filterFailing := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingAuthSvc, generator, km, contextHolder)
+			routerFailing := NewMockSecurityRouter()
+			filterFailing.RegisterSecurityEndpoint(routerFailing)
+
+			hRevokeFindFail := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeFindFail.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeFindFail.SetFormValue("token", "revoke-at-val")
+			Expect(routerFailing.Execute(hRevokeFindFail)).To(HaveOccurred())
+
+			// 5. Revoke returns 500 when Remove fails
+			failingAuthSvcRemove := &testMockFailingAuthorizationService{
+				OAuth2AuthorizationService: authService,
+				failRemove:                 true,
+			}
+			filterFailingRemove := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingAuthSvcRemove, generator, km, contextHolder)
+			routerFailingRemove := NewMockSecurityRouter()
+			filterFailingRemove.RegisterSecurityEndpoint(routerFailingRemove)
+
+			atRm := NewOAuth2AccessToken(TokenTypeBearer, "revoke-rm-fail-val", now, now.Add(time.Hour), []string{"read"})
+			authRm := &OAuth2Authorization{
+				ID:                 "revoke-rm-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-revoke",
+				AccessToken:        atRm,
+			}
+			Expect(authService.Save(authRm)).NotTo(HaveOccurred())
+
+			hRevokeRmFail := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeRmFail.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeRmFail.SetFormValue("token", "revoke-rm-fail-val")
+			Expect(routerFailingRemove.Execute(hRevokeRmFail)).To(HaveOccurred())
+
+			// 6. Token endpoint returns server_error when Save fails on authorization_code grant
+			tokenURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/token")
+			Expect(err).NotTo(HaveOccurred())
+
+			failingAuthSvcSave := &testMockFailingAuthorizationService{
+				OAuth2AuthorizationService: authService,
+				failSave:                   true,
+			}
+			filterFailingSave := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingAuthSvcSave, generator, km, contextHolder)
+			routerFailingSave := NewMockSecurityRouter()
+			filterFailingSave.RegisterSecurityEndpoint(routerFailingSave)
+
+			authCodeToSave := &OAuth2Authorization{
+				ID:                 "code-save-fail-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-save-fail",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "code-save-fail",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					CodeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+					CodeChallengeMethod: "S256",
+				},
+			}
+			Expect(authService.Save(authCodeToSave)).NotTo(HaveOccurred())
+
+			hAuthCodeSaveFail := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hAuthCodeSaveFail.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hAuthCodeSaveFail.SetFormValue("grant_type", "authorization_code")
+			hAuthCodeSaveFail.SetFormValue("code", "code-save-fail")
+			hAuthCodeSaveFail.SetFormValue("redirect_uri", registeredClient.RedirectURIs[0])
+			hAuthCodeSaveFail.SetFormValue("code_verifier", "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+			Expect(routerFailingSave.Execute(hAuthCodeSaveFail)).To(HaveOccurred())
+			var saveFailResp map[string]any
+			Expect(json.Unmarshal(hAuthCodeSaveFail.Res.Body.Bytes(), &saveFailResp)).To(Succeed())
+			Expect(saveFailResp["error"]).To(Equal(OAuth2ErrorServerError))
+
+			// 7. Token endpoint returns server_error when Save fails on client_credentials grant
+			hCCSaveFail := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hCCSaveFail.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hCCSaveFail.SetFormValue("grant_type", "client_credentials")
+			Expect(routerFailingSave.Execute(hCCSaveFail)).To(HaveOccurred())
+			var ccSaveFailResp map[string]any
+			Expect(json.Unmarshal(hCCSaveFail.Res.Body.Bytes(), &ccSaveFailResp)).To(Succeed())
+			Expect(ccSaveFailResp["error"]).To(Equal(OAuth2ErrorServerError))
 		})
 
 		It("tests handleAuthorize and handleToken validation error branches", func() {
@@ -1138,4 +1222,32 @@ func (this *testMockFailingJWKSource) GetSigningKey() (kid string, privKey any, 
 
 func (this *testMockFailingJWKSource) GetVerificationKey(_ string) (pubKey any, alg string, err Error) {
 	return nil, "", NewError("NoVerificationKey", "no key")
+}
+
+type testMockFailingAuthorizationService struct {
+	OAuth2AuthorizationService
+	failSave        bool
+	failFindByToken bool
+	failRemove      bool
+}
+
+func (this *testMockFailingAuthorizationService) Save(auth *OAuth2Authorization) Error {
+	if this.failSave {
+		return NewError("StorageError", "database write failure")
+	}
+	return this.OAuth2AuthorizationService.Save(auth)
+}
+
+func (this *testMockFailingAuthorizationService) FindByToken(token, tokenType string) (*OAuth2Authorization, Error) {
+	if this.failFindByToken {
+		return nil, NewError("StorageError", "database lookup failure")
+	}
+	return this.OAuth2AuthorizationService.FindByToken(token, tokenType)
+}
+
+func (this *testMockFailingAuthorizationService) Remove(auth *OAuth2Authorization) Error {
+	if this.failRemove {
+		return NewError("StorageError", "database delete failure")
+	}
+	return this.OAuth2AuthorizationService.Remove(auth)
 }

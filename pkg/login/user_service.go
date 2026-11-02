@@ -141,7 +141,22 @@ func (this *DefaultOidcUserService) LoadUser(userRequest *OidcUserRequest) (Oidc
 		}
 		oauth2User, err := this.oauth2UserService.LoadUser(oauth2Req)
 		if err == nil && oauth2User != nil {
-			userInfo = &OidcUserInfo{Claims: oauth2User.GetAttributes()}
+			attrs := oauth2User.GetAttributes()
+			var idTokenSub, userInfoSub string
+			if userRequest.IdToken != nil && userRequest.IdToken.Claims != nil {
+				if s, ok := userRequest.IdToken.Claims[subClaimName].(string); ok {
+					idTokenSub = s
+				}
+			}
+			if attrs != nil {
+				if s, ok := attrs[subClaimName].(string); ok {
+					userInfoSub = s
+				}
+			}
+			if idTokenSub == "" || userInfoSub == "" || idTokenSub != userInfoSub {
+				return nil, NewError("InvalidUserInfoResponse", fmt.Sprintf("userInfo sub %q does not match idToken sub %q", userInfoSub, idTokenSub))
+			}
+			userInfo = &OidcUserInfo{Claims: attrs}
 		} else if err != nil {
 			err.LogError()
 		}

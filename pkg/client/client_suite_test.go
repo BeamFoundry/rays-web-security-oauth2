@@ -77,6 +77,29 @@ var _ = Describe("InMemoryOAuth2AuthorizedClientService", func() {
 		_, err = service.LoadAuthorizedClient("salesforce", "john")
 		Expect(err).To(HaveOccurred())
 	})
+
+	It("prevents key collisions when registration ID or principal name contain delimiters", func() {
+		reg1 := ClientRegistrationBuilder{}.New("app::user").ClientID("c1").Build()
+		reg2 := ClientRegistrationBuilder{}.New("app").ClientID("c2").Build()
+		now := time.Now()
+		tok1 := OAuth2AccessToken{}.New(TokenTypeBearer, "token-1", now, now.Add(time.Hour), nil)
+		tok2 := OAuth2AccessToken{}.New(TokenTypeBearer, "token-2", now, now.Add(time.Hour), nil)
+
+		client1 := OAuth2AuthorizedClient{}.New(reg1, "one", tok1, nil)
+		client2 := OAuth2AuthorizedClient{}.New(reg2, "user::one", tok2, nil)
+
+		service := InMemoryOAuth2AuthorizedClientService{}.New()
+		Expect(service.SaveAuthorizedClient(client1)).To(Succeed())
+		Expect(service.SaveAuthorizedClient(client2)).To(Succeed())
+
+		loaded1, err1 := service.LoadAuthorizedClient("app::user", "one")
+		Expect(err1).NotTo(HaveOccurred())
+		Expect(loaded1.AccessToken.TokenValue).To(Equal("token-1"))
+
+		loaded2, err2 := service.LoadAuthorizedClient("app", "user::one")
+		Expect(err2).NotTo(HaveOccurred())
+		Expect(loaded2.AccessToken.TokenValue).To(Equal("token-2"))
+	})
 })
 
 var _ = Describe("Authorized Client Providers & Manager", func() {

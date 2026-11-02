@@ -26,7 +26,7 @@ You can customize how authorities are extracted:
 ```go
 converter := DefaultJwtAuthenticationConverter{}.New().
     WithPrincipalClaimName("preferred_username").
-    WithAuthorityPrefix("ROLE_")
+    WithAuthorityPrefix("SCOPE_") // Default prefix for scope claims; maps "read" to "SCOPE_read"
 
 provider := JwtAuthenticationProvider{}.New(decoder).
     WithConverter(converter)
@@ -37,6 +37,6 @@ Now, endpoint policies can enforce:
 ```go
 AuthorizedHTTPRequests().
     Paths("/api/orders/**").HasAuthority("SCOPE_read").
-    Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN"
+    Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN" from roles claims
     AnyRequest().Authenticated()
 ```

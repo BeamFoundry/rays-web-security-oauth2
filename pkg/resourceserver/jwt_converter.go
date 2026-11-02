@@ -71,9 +71,17 @@ func getClaimValue(claims map[string]any, path string) (any, bool) {
 func (this *DefaultJwtAuthenticationConverter) Convert(token *Jwt) (*JwtAuthenticationToken, Error) {
 	authorities := make([]GrantedAuthority, 0)
 
-	addAuth := func(s string) {
+	addAuth := func(sourceClaim, s string) {
 		s = strings.TrimSpace(s)
 		if s == "" {
+			return
+		}
+		if sourceClaim == "scope" || sourceClaim == "scp" {
+			if this.authorityPrefix == "" {
+				authorities = append(authorities, Authority(s))
+			} else {
+				authorities = append(authorities, Authority(this.authorityPrefix+s))
+			}
 			return
 		}
 		if strings.HasPrefix(s, "ROLE_") || strings.HasPrefix(s, "SCOPE_") || this.authorityPrefix == "" {
@@ -88,17 +96,17 @@ func (this *DefaultJwtAuthenticationConverter) Convert(token *Jwt) (*JwtAuthenti
 			switch v := val.(type) {
 			case string:
 				for part := range strings.SplitSeq(v, " ") {
-					addAuth(part)
+					addAuth(claimKey, part)
 				}
 			case []any:
 				for _, item := range v {
 					if s, ok := item.(string); ok {
-						addAuth(s)
+						addAuth(claimKey, s)
 					}
 				}
 			case []string:
 				for _, s := range v {
-					addAuth(s)
+					addAuth(claimKey, s)
 				}
 			default:
 			}

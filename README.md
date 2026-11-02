@@ -529,6 +529,29 @@ func (this *ApiConsumerService) GetServiceAccessToken() (string, Error) {
 Once authorized, your application can consume remote APIs with automatic Bearer token injection:
 
 ```go
+type RemoteApiClient struct {
+    clientManager OAuth2AuthorizedClientManager
+    httpClient    *http.Client
+}
+
+func NewRemoteApiClient(clientManager OAuth2AuthorizedClientManager) *RemoteApiClient {
+    return &RemoteApiClient{
+        clientManager: clientManager,
+        httpClient: &http.Client{
+            Timeout: 10 * time.Second,
+            CheckRedirect: func(req *http.Request, via []*http.Request) error {
+                if len(via) >= 10 {
+                    return fmt.Errorf("stopped after 10 redirects")
+                }
+                if req.URL.Scheme != "https" {
+                    return fmt.Errorf("redirect target must use HTTPS: %s", req.URL.String())
+                }
+                return nil
+            },
+        },
+    }
+}
+
 func (this *RemoteApiClient) CallApi(req *http.Request, reg *ClientRegistration, principal string) (*http.Response, Error) {
     authReq := &OAuth2AuthorizeRequest{
         ClientRegistration: reg,
@@ -631,7 +654,7 @@ The default converter searches standard claim attributes (`scope`, `scp`, `autho
 ```go
 converter := DefaultJwtAuthenticationConverter{}.New().
     WithPrincipalClaimName("preferred_username").
-    WithAuthorityPrefix("ROLE_")
+    WithAuthorityPrefix("SCOPE_") // Default prefix for scope claims; maps "read" to "SCOPE_read"
 
 provider := JwtAuthenticationProvider{}.New(decoder).
     WithConverter(converter)
@@ -642,7 +665,7 @@ Now, endpoint policies can enforce:
 ```go
 AuthorizedHTTPRequests().
     Paths("/api/orders/**").HasAuthority("SCOPE_read").
-    Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN"
+    Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN" from roles claims
     AnyRequest().Authenticated()
 ```
 

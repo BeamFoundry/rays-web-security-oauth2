@@ -315,28 +315,35 @@ func (this *NimbusJwtDecoder) Decode(token string) (*Jwt, Error) {
 
 	now := time.Now()
 
-	// Validate exp
-	if expVal, ok := claims["exp"]; ok {
-		var expUnix int64
-		switch v := expVal.(type) {
-		case float64:
-			expUnix = int64(v)
-		case int64:
-			expUnix = v
-		case json.Number:
-			if n, numErr := v.Int64(); numErr != nil {
-				NewErrorFrom(numErr).LogError()
-			} else {
-				expUnix = n
-			}
-		default:
+	// Validate exp: require valid positive numeric exp claim
+	expVal, ok := claims["exp"]
+	if !ok {
+		return nil, NewError("JwtExpiredError", "missing exp claim")
+	}
+
+	var expUnix int64
+	switch v := expVal.(type) {
+	case float64:
+		expUnix = int64(v)
+	case int64:
+		expUnix = v
+	case json.Number:
+		n, numErr := v.Int64()
+		if numErr != nil {
+			return nil, NewError("JwtExpiredError", "invalid exp claim: non-numeric")
 		}
-		if expUnix > 0 {
-			expTime := time.Unix(expUnix, 0)
-			if now.After(expTime.Add(this.skew)) {
-				return nil, NewError("JwtExpiredError", "jwt is expired")
-			}
-		}
+		expUnix = n
+	default:
+		return nil, NewError("JwtExpiredError", "invalid exp claim: non-numeric")
+	}
+
+	if expUnix <= 0 {
+		return nil, NewError("JwtExpiredError", "invalid exp claim: zero or negative")
+	}
+
+	expTime := time.Unix(expUnix, 0)
+	if now.After(expTime.Add(this.skew)) {
+		return nil, NewError("JwtExpiredError", "jwt is expired")
 	}
 
 	// Validate nbf

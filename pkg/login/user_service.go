@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
@@ -48,7 +49,10 @@ func (this *DefaultOAuth2UserService) LoadUser(userRequest *OAuth2UserRequest) (
 		return nil, NewError("InvalidConfigurationError", "userInfoURI is missing in client registration provider details")
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, userInfoURI, http.NoBody)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURI, http.NoBody)
 	if err != nil {
 		return nil, NewErrorFrom(err)
 	}
@@ -148,5 +152,10 @@ func (this *DefaultOidcUserService) LoadUser(userRequest *OidcUserRequest) (Oidc
 		nameKey = subClaimName
 	}
 
-	return DefaultOidcUser{}.New(authorities, userRequest.IdToken, userInfo, nameKey), nil
+	user := DefaultOidcUser{}.New(authorities, userRequest.IdToken, userInfo, nameKey)
+	if user.GetName() == "" {
+		return nil, NewError("InvalidUserError", fmt.Sprintf("oidc user name attribute %q is missing or empty", nameKey))
+	}
+
+	return user, nil
 }

@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -380,7 +381,9 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 
 			// Tampered signature
 			encoder := NewDefaultJwtEncoder(km)
-			tok, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: NewJwtClaimsSet()})
+			validClaims := NewJwtClaimsSet()
+			validClaims.ExpiresAt = time.Now().Add(10 * time.Minute)
+			tok, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: validClaims})
 			Expect(err).NotTo(HaveOccurred())
 
 			tampered := tok.TokenValue[:len(tok.TokenValue)-5] + "XXXXX"
@@ -447,9 +450,19 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("expired"))
 
+			// Missing exp claim
+			claimsNoExp := NewJwtClaimsSet()
+			claimsNoExp.Subject = "no-exp-user"
+			tokNoExp, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: claimsNoExp})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = NewNimbusJwtDecoder(km).Decode(tokNoExp.TokenValue)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("missing exp claim"))
+
 			// Not active yet (nbf in future)
 			nbfClaims := NewJwtClaimsSet()
 			nbfClaims.NotBefore = time.Now().Add(1 * time.Hour)
+			nbfClaims.ExpiresAt = time.Now().Add(2 * time.Hour)
 			nbfTok, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: nbfClaims})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = NewNimbusJwtDecoder(km).Decode(nbfTok.TokenValue)
@@ -459,6 +472,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			// Issuer mismatch
 			issClaims := NewJwtClaimsSet()
 			issClaims.Issuer = "https://actual-iss.com"
+			issClaims.ExpiresAt = time.Now().Add(1 * time.Hour)
 			issTok, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: issClaims})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = NewNimbusJwtDecoder(km).WithIssuer("https://expected-iss.com").Decode(issTok.TokenValue)
@@ -468,6 +482,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			// Audience mismatch
 			audClaims := NewJwtClaimsSet()
 			audClaims.Audience = []string{"client-app"}
+			audClaims.ExpiresAt = time.Now().Add(1 * time.Hour)
 			audTok, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: audClaims})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = NewNimbusJwtDecoder(km).WithAudience("wrong-app").Decode(audTok.TokenValue)
@@ -483,7 +498,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			// HS256 signing and verification
 			hmacSource := &testMockJWKSource{secret: []byte("hmac-secret-32-bytes-long-key!!"), alg: "HS256"}
 			rawHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT","kid":"hmac-1"}`))
-			rawClaims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"hmac-user"}`))
+			rawClaims := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"sub":"hmac-user","exp":%d}`, time.Now().Add(1*time.Hour).Unix())))
 			mac := hmac.New(sha256.New, []byte("hmac-secret-32-bytes-long-key!!"))
 			Expect(mac.Write([]byte(rawHeader + "." + rawClaims))).To(Equal(len(rawHeader + "." + rawClaims)))
 			rawSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -492,6 +507,24 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			decodedHmac, err := NewNimbusJwtDecoder(hmacSource).Decode(hmacToken)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(decodedHmac.Subject()).To(Equal("hmac-user"))
+
+			// Non-numeric exp claim
+			rawNonNumExpClaims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user","exp":"not-a-number"}`))
+			macNonNum := hmac.New(sha256.New, []byte("hmac-secret-32-bytes-long-key!!"))
+			Expect(macNonNum.Write([]byte(rawHeader + "." + rawNonNumExpClaims))).To(Equal(len(rawHeader + "." + rawNonNumExpClaims)))
+			tokNonNumExp := rawHeader + "." + rawNonNumExpClaims + "." + base64.RawURLEncoding.EncodeToString(macNonNum.Sum(nil))
+			_, err = NewNimbusJwtDecoder(hmacSource).Decode(tokNonNumExp)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("non-numeric"))
+
+			// Zero or negative exp claim
+			rawZeroExpClaims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user","exp":0}`))
+			macZero := hmac.New(sha256.New, []byte("hmac-secret-32-bytes-long-key!!"))
+			Expect(macZero.Write([]byte(rawHeader + "." + rawZeroExpClaims))).To(Equal(len(rawHeader + "." + rawZeroExpClaims)))
+			tokZeroExp := rawHeader + "." + rawZeroExpClaims + "." + base64.RawURLEncoding.EncodeToString(macZero.Sum(nil))
+			_, err = NewNimbusJwtDecoder(hmacSource).Decode(tokZeroExp)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("zero or negative"))
 
 			// HS256 bad signature
 			badHmacToken := rawHeader + "." + rawClaims + "." + base64.RawURLEncoding.EncodeToString([]byte("bad-sig-bytes-length-here"))

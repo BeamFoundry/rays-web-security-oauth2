@@ -147,6 +147,52 @@ var _ = Describe("JwtAuthenticationConverter", func() {
 		}
 		Expect(names).To(ConsistOf("ROLE_ADMIN", "ROLE_MANAGER"))
 	})
+
+	It("always applies configured authorityPrefix to scope/scp claims and preserves passthrough for role-style claims", func() {
+		tok := &Jwt{
+			TokenValue: "raw",
+			Headers:    map[string]any{"alg": "RS256"},
+			Claims: map[string]any{
+				"sub":   "user-100",
+				"scope": "ROLE_admin SCOPE_read write",
+				"roles": []any{"ROLE_USER", "SCOPE_CUSTOM", "AUDITOR"},
+			},
+		}
+
+		converter := DefaultJwtAuthenticationConverter{}.New()
+		converted, err := converter.Convert(tok)
+		Expect(err).NotTo(HaveOccurred())
+
+		var names []string
+		for _, a := range converted.GetAuthorities() {
+			names = append(names, a.Authority())
+		}
+		Expect(names).To(ConsistOf(
+			"SCOPE_ROLE_admin",
+			"SCOPE_SCOPE_read",
+			"SCOPE_write",
+			"ROLE_USER",
+			"SCOPE_CUSTOM",
+			"SCOPE_AUDITOR",
+		))
+
+		emptyPrefixConv := DefaultJwtAuthenticationConverter{}.New().WithAuthorityPrefix("")
+		convertedEmpty, err := emptyPrefixConv.Convert(tok)
+		Expect(err).NotTo(HaveOccurred())
+
+		var emptyNames []string
+		for _, a := range convertedEmpty.GetAuthorities() {
+			emptyNames = append(emptyNames, a.Authority())
+		}
+		Expect(emptyNames).To(ConsistOf(
+			"ROLE_admin",
+			"SCOPE_read",
+			"write",
+			"ROLE_USER",
+			"SCOPE_CUSTOM",
+			"AUDITOR",
+		))
+	})
 })
 
 var _ = Describe("JwtAuthenticationProvider", func() {

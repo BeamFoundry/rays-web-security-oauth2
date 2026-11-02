@@ -277,6 +277,12 @@ func (this *OAuth2LoginAuthenticationFilter) Authenticate(handler SecurityHandle
 		return (&DefaultSecurityFilterChainException{}).ReportError(authEx, 401)
 	}
 
+	var redirect string
+	if r, ok := handler.SessionValue("redirect").(string); ok {
+		redirect = r
+		handler.SetSessionValue("redirect", nil)
+	}
+
 	// Session refresh & store authenticated user
 	handler.SessionRefresh()
 	handler.SetSessionValue("authentication", authenticated)
@@ -289,18 +295,30 @@ func (this *OAuth2LoginAuthenticationFilter) Authenticate(handler SecurityHandle
 	}
 
 	targetURL := this.defaultSuccessURL
-	if redirect, ok := handler.SessionValue("redirect").(string); ok && redirect != "" {
+	if redirect != "" && isValidRedirectTarget(redirect) {
 		targetURL = redirect
-		handler.SetSessionValue("redirect", nil)
 	}
 
 	return (&DefaultSecurityFilterChainException{}).RedirectTo(targetURL)
 }
 
+func isValidRedirectTarget(path string) bool {
+	if !strings.HasPrefix(path, "/") {
+		return false
+	}
+	if strings.HasPrefix(path, "//") || strings.HasPrefix(path, "/\\") {
+		return false
+	}
+	return true
+}
+
 // AuthenticationRequired redirects unauthenticated requests to the authorization endpoint
 func (this *OAuth2LoginAuthenticationFilter) AuthenticationRequired(handler SecurityHandler) SecurityFilterChainException {
 	if handler.Method() == "GET" {
-		handler.SetSessionValue("redirect", handler.Path())
+		path := handler.Path()
+		if isValidRedirectTarget(path) {
+			handler.SetSessionValue("redirect", path)
+		}
 	}
 
 	regID := this.defaultRegistrationID

@@ -318,7 +318,10 @@ func (this *OAuth2LoginAuthenticationProvider) exchangeCodeForTokens(
 		data.Set("client_secret", reg.ClientSecret)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, reg.ProviderDetails.TokenURI, strings.NewReader(data.Encode()))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reg.ProviderDetails.TokenURI, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, NewErrorFrom(err)
 	}

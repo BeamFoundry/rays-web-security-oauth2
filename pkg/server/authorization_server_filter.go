@@ -231,7 +231,7 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		return handler.Error(http.StatusBadRequest, "Unsupported response_type: "+responseType)
 	}
 
-	if client.RequireProofKey && (codeChallenge == "" || codeChallengeMethod != "S256") {
+	if (client.RequireProofKey && codeChallenge == "") || (codeChallenge != "" && codeChallengeMethod != "S256") {
 		return handler.Error(http.StatusBadRequest, "PKCE with code_challenge_method=S256 is required")
 	}
 
@@ -354,7 +354,8 @@ func (this *OAuth2AuthorizationServerFilter) authenticateClient(handler Security
 	}
 
 	if !isPublicClient(client) {
-		if subtle.ConstantTimeCompare([]byte(client.ClientSecret), []byte(clientSecret)) != 1 {
+		if client.ClientSecret == "" || clientSecret == "" ||
+			subtle.ConstantTimeCompare([]byte(client.ClientSecret), []byte(clientSecret)) != 1 {
 			return nil, NewError("InvalidClientError", "Client authentication failed")
 		}
 	}

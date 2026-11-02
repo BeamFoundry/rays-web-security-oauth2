@@ -750,6 +750,22 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			exSuccess := filterWithMgr.Authenticate(hSuccess)
 			Expect(exSuccess).To(HaveOccurred())
 			Expect(exSuccess.Action()).To(Equal(DefaultSecurityFilterAction{}.New().REDIRECT.Name()))
+			Expect(exSuccess.(*DefaultSecurityFilterChainException).To()).To(Equal("/user/custom-dashboard"))
+
+			// 3b. Malicious session redirect with protocol-relative or browser-normalized path falls back to defaultSuccessURL
+			for _, evilRedirect := range []string{"//evil.com", "/\\evil.com", "http://evil.com"} {
+				hEvil := NewMockSecurityHandler(HttpMethods.GET, successCallbackURL)
+				hEvil.SetSessionValue("redirect", evilRedirect)
+				authReqRepo.SaveAuthorizationRequest(&OAuth2AuthorizationRequest{
+					State:       "good-state",
+					RedirectURI: "https://app.example.com/callback",
+				}, hEvil)
+				exEvil := filterWithMgr.Authenticate(hEvil)
+				Expect(exEvil).To(HaveOccurred())
+				Expect(exEvil.Action()).To(Equal(DefaultSecurityFilterAction{}.New().REDIRECT.Name()))
+				Expect(exEvil.(*DefaultSecurityFilterChainException).To()).To(Equal("/"))
+				Expect(hEvil.SessionValue("redirect")).To(BeNil())
+			}
 
 			// 4. AuthenticationRequired GET saves path to redirect
 			reqURL, err := url.Parse("https://app.example.com/profile")
@@ -759,6 +775,15 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(exReq).To(HaveOccurred())
 			Expect(exReq.Action()).To(Equal(DefaultSecurityFilterAction{}.New().REDIRECT.Name()))
 			Expect(hReqGet.SessionValue("redirect")).To(Equal("/profile"))
+
+			// 4b. AuthenticationRequired rejects protocol-relative and browser-normalized paths
+			for _, evilPath := range []string{"//evil.com", "/\\evil.com"} {
+				uEvil := &url.URL{Path: evilPath}
+				hReqEvil := NewMockSecurityHandler(HttpMethods.GET, uEvil)
+				exReqEvil := filter.AuthenticationRequired(hReqEvil)
+				Expect(exReqEvil).To(HaveOccurred())
+				Expect(hReqEvil.SessionValue("redirect")).To(BeNil())
+			}
 
 			// 5. AuthenticationRequired POST does not save redirect
 			hReqPost := NewMockSecurityHandler(HttpMethods.POST, reqURL)
@@ -1129,6 +1154,18 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(oidcUserWithFallback.GetName()).To(Equal("sub-123"))
+
+			// OIDC UserService rejects missing or empty user name attribute
+			regOidcNoName := ClientRegistrationBuilder{}.New("reg-oidc-no-name").
+				ClientID("c-oidc-no-name").
+				Build()
+			_, err = failingOidcUserSvc.LoadUser(&OidcUserRequest{
+				ClientRegistration: regOidcNoName,
+				AccessToken:        OAuth2AccessToken{}.New(TokenTypeBearer, "tok", time.Now(), time.Now().Add(time.Hour), nil),
+				IdToken:            &OidcIdToken{TokenValue: "id-tok", Claims: map[string]any{}},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("InvalidUserError"))
 		})
 	})
 })

@@ -11,7 +11,9 @@ Once authorized, your application can consume remote APIs with automatic Bearer 
 package services
 
 import (
+    "fmt"
     "net/http"
+    "time"
 
     . "github.com/BeamFoundry/rays/pkg/lang"
     . "github.com/BeamFoundry/rays-web-security-oauth2/pkg/client"
@@ -21,6 +23,24 @@ import (
 type RemoteApiClient struct {
     clientManager OAuth2AuthorizedClientManager
     httpClient    *http.Client
+}
+
+func NewRemoteApiClient(clientManager OAuth2AuthorizedClientManager) *RemoteApiClient {
+    return &RemoteApiClient{
+        clientManager: clientManager,
+        httpClient: &http.Client{
+            Timeout: 10 * time.Second,
+            CheckRedirect: func(req *http.Request, via []*http.Request) error {
+                if len(via) >= 10 {
+                    return fmt.Errorf("stopped after 10 redirects")
+                }
+                if req.URL.Scheme != "https" {
+                    return fmt.Errorf("redirect target must use HTTPS: %s", req.URL.String())
+                }
+                return nil
+            },
+        },
+    }
 }
 
 func (this *RemoteApiClient) CallApi(req *http.Request, reg *ClientRegistration, principal string) (*http.Response, Error) {

@@ -119,8 +119,12 @@ var _ = Describe("OAuth2 & JWT Security Attack Vectors", func() {
 			tok, err := NewDefaultJwtEncoder(km).Encode(&JwtEncoderParameters{ClaimsSet: claims})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Flip the last byte of the signature
-			tampered := tok.TokenValue[:len(tok.TokenValue)-2] + "AA"
+			// Flip the last bytes of the signature ensuring it always differs
+			replacement := "AA"
+			if tok.TokenValue[len(tok.TokenValue)-2:] == "AA" {
+				replacement = "BB"
+			}
+			tampered := tok.TokenValue[:len(tok.TokenValue)-2] + replacement
 			_, decodeErr := decoder.Decode(tampered)
 			Expect(decodeErr).To(HaveOccurred())
 			Expect(decodeErr.Name()).To(Equal("SignatureVerificationError"))

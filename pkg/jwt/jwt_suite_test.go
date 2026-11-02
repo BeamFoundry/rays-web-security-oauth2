@@ -316,7 +316,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			var concurrentFetches atomic.Int64
 			tsConcurrent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				concurrentFetches.Add(1)
-				time.Sleep(10 * time.Millisecond) // simulate small network latency
+				time.Sleep(300 * time.Millisecond) // simulate network latency exceeding Ready timeout
 				w.Header().Set("Content-Type", "application/json")
 				_, writeErr := w.Write(jsonBytes)
 				Expect(writeErr).NotTo(HaveOccurred())
@@ -333,6 +333,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			wg.Add(numGoroutines)
 			for i := 0; i < numGoroutines; i++ {
 				go func() {
+					defer GinkgoRecover()
 					defer wg.Done()
 					dec, decErr := concurrentDecoder.Decode(tok.TokenValue)
 					Expect(decErr).NotTo(HaveOccurred())

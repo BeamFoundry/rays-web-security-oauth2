@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
@@ -24,6 +25,8 @@ type OAuth2LoginAuthenticationProvider struct {
 	userService             OAuth2UserService
 	oidcUserService         OidcUserService
 	jwtDecoder              JwtDecoder
+	jwksDecoders            map[string]JwtDecoder
+	decodersMu              *sync.RWMutex
 	httpClient              *http.Client
 	injectedUserService     Optional[OAuth2UserService] `@:"Inject"`
 	injectedOidcUserService Optional[OidcUserService]   `@:"Inject"`
@@ -53,6 +56,8 @@ func (this OAuth2LoginAuthenticationProvider) New(
 	this.httpClient = client
 	this.userService = userService
 	this.oidcUserService = oidcUserService
+	this.jwksDecoders = make(map[string]JwtDecoder)
+	this.decodersMu = &sync.RWMutex{}
 	return &this
 }
 
@@ -86,7 +91,55 @@ func (this *OAuth2LoginAuthenticationProvider) PostConstruct() Error {
 	if dec, ok := this.injectedJwtDecoder.Get(); ok {
 		this.jwtDecoder = dec
 	}
+	if this.decodersMu == nil {
+		this.decodersMu = &sync.RWMutex{}
+	}
+	if this.jwksDecoders == nil {
+		this.jwksDecoders = make(map[string]JwtDecoder)
+	}
 	return nil
+}
+
+func (this *OAuth2LoginAuthenticationProvider) getOrCreateDecoder(reg *ClientRegistration) JwtDecoder {
+	if this.jwtDecoder != nil {
+		return this.jwtDecoder
+	}
+	if reg == nil || reg.ProviderDetails.JwkSetURI == "" {
+		return nil
+	}
+
+	if this.decodersMu == nil {
+		this.decodersMu = &sync.RWMutex{}
+	}
+
+	this.decodersMu.RLock()
+	if this.jwksDecoders != nil {
+		if dec, ok := this.jwksDecoders[reg.RegistrationID]; ok {
+			this.decodersMu.RUnlock()
+			return dec
+		}
+	}
+	this.decodersMu.RUnlock()
+
+	this.decodersMu.Lock()
+	defer this.decodersMu.Unlock()
+
+	if this.jwksDecoders == nil {
+		this.jwksDecoders = make(map[string]JwtDecoder)
+	}
+	if dec, ok := this.jwksDecoders[reg.RegistrationID]; ok {
+		return dec
+	}
+
+	jwxDec := NewJwxJwtDecoderWithRemoteJWKS(reg.ProviderDetails.JwkSetURI)
+	if reg.ProviderDetails.IssuerURI != "" {
+		jwxDec = jwxDec.WithIssuer(reg.ProviderDetails.IssuerURI)
+	}
+	if reg.ClientID != "" {
+		jwxDec = jwxDec.WithAudience(reg.ClientID)
+	}
+	this.jwksDecoders[reg.RegistrationID] = jwxDec
+	return jwxDec
 }
 
 func (this *OAuth2LoginAuthenticationProvider) Supports(auth Authentication) bool {
@@ -171,17 +224,7 @@ func (this *OAuth2LoginAuthenticationProvider) Authenticate(auth Authentication)
 	if isOidc {
 		var idToken *OidcIdToken
 		if tokenResp.IdToken != "" {
-			decoder := this.jwtDecoder
-			if decoder == nil && reg.ProviderDetails.JwkSetURI != "" {
-				jwxDec := NewJwxJwtDecoderWithRemoteJWKS(reg.ProviderDetails.JwkSetURI)
-				if reg.ProviderDetails.IssuerURI != "" {
-					jwxDec = jwxDec.WithIssuer(reg.ProviderDetails.IssuerURI)
-				}
-				if reg.ClientID != "" {
-					jwxDec = jwxDec.WithAudience(reg.ClientID)
-				}
-				decoder = jwxDec
-			}
+			decoder := this.getOrCreateDecoder(reg)
 
 			if decoder == nil {
 				oauthErr := OAuth2Error{

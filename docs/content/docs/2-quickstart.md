@@ -38,7 +38,14 @@ type ResourceServerSecurityConfig struct {
     Configuration
 }
 
-// 1. Register the JwtAuthenticationProvider as a Beam.
+// 1. Register a JwtDecoder bean configured with the expected issuer and audience.
+func (this *ResourceServerSecurityConfig) JwtDecoder() JwtDecoder {
+    return NewJwxJwtDecoderWithRemoteJWKS("https://auth.example.com/.well-known/jwks.json").
+        WithIssuer("https://auth.example.com").
+        WithAudience("my-api")
+}
+
+// 2. Register the JwtAuthenticationProvider as a Beam.
 // rays-web-security's AuthenticationManager automatically injects all AuthenticationProvider beans!
 func (this *ResourceServerSecurityConfig) JwtAuthenticationProvider(
     that struct {
@@ -48,7 +55,7 @@ func (this *ResourceServerSecurityConfig) JwtAuthenticationProvider(
     return JwtAuthenticationProvider{}.New(that.decoder)
 }
 
-// 2. Configure HttpSecurity
+// 3. Configure HttpSecurity
 func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
     // Registers BearerTokenAuthenticationFilter fluently via With().
     // Rays auto-injects AuthenticationManager and SecurityContextHolder into the filter prototype.
@@ -97,6 +104,7 @@ func (this *WebSecurityConfig) ClientRepository() ClientRegistrationRepository {
         ClientSecret("your-github-client-secret").
         AuthorizationURI("https://github.com/login/oauth/authorize").
         TokenURI("https://github.com/login/oauth/access_token").
+        RedirectURI("https://app.example.com/login/oauth2/code/github").
         UserInfoURI("https://api.github.com/user").
         UserNameAttributeName("login").
         Scope("read:user", "user:email").
@@ -123,6 +131,7 @@ func (this *WebSecurityConfig) HttpSecurity(
         With(OAuth2Login).
             ClientRegistrationRepository(that.clientRepo).
             DefaultRegistrationID("github").
+            BaseURL("https://app.example.com").
             DefaultSuccessURL("/dashboard").
         And().
         AuthorizedHTTPRequests().

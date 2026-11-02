@@ -356,6 +356,17 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 				WithAudience("remote-audience")
 			_, err = decoderWrongIss.Decode(tok.TokenValue)
 			Expect(err).To(HaveOccurred())
+
+			// Test missing expiration claim rejected even when no other optional settings configured
+			claimsNoExp := NewJwtClaimsSet()
+			claimsNoExp.Issuer = "https://remote.example.com"
+			claimsNoExp.Subject = "remote-user"
+			tokNoExp, err := encoder.Encode(&JwtEncoderParameters{ClaimsSet: claimsNoExp})
+			Expect(err).NotTo(HaveOccurred())
+			decoderDefault := NewJwxJwtDecoderWithKeySet(set)
+			_, err = decoderDefault.Decode(tokNoExp.TokenValue)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("jwt validation failed"))
 		})
 
 		It("tests NimbusJwtDecoder error handling on malformed token and bad signature", func() {

@@ -34,6 +34,10 @@ func (this *RemoteApiClient) CallApi(req *http.Request, reg *ClientRegistration,
         return nil, err
     }
 
+    if req.URL == nil || req.URL.Scheme != "https" {
+        return nil, NewError("InsecureRequestError", "bearer tokens must only be sent over HTTPS")
+    }
+
     req.Header.Set("Authorization", "Bearer "+authorizedClient.AccessToken.TokenValue)
     resp, reqErr := this.httpClient.Do(req)
     if reqErr != nil {

@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -285,8 +284,14 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		Invalidated:         false,
 	}
 
+	authIDBytes := make([]byte, 16)
+	if _, randErr := rand.Read(authIDBytes); randErr != nil {
+		NewErrorFrom(randErr).LogError()
+		return handler.Error(http.StatusInternalServerError, "Failed to generate authorization id")
+	}
+
 	authorization := &OAuth2Authorization{
-		ID:                 fmt.Sprintf("auth-%d", now.UnixNano()),
+		ID:                 "auth-" + base64.RawURLEncoding.EncodeToString(authIDBytes),
 		RegisteredClientID: client.ID,
 		PrincipalName:      currentAuth.GetName(),
 		AuthorizedScopes:   scopes,
@@ -439,9 +444,13 @@ func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handle
 		return this.sendTokenError(handler, OAuth2ErrorUnauthorizedClient, "Client not authorized for client_credentials")
 	}
 
-	now := time.Now()
+	authIDBytes := make([]byte, 16)
+	if _, randErr := rand.Read(authIDBytes); randErr != nil {
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to generate authorization id")
+	}
+
 	auth := &OAuth2Authorization{
-		ID:                 fmt.Sprintf("auth-%d", now.UnixNano()),
+		ID:                 "auth-" + base64.RawURLEncoding.EncodeToString(authIDBytes),
 		RegisteredClientID: client.ID,
 		PrincipalName:      client.ClientID,
 		AuthorizedScopes:   client.Scopes,
@@ -467,7 +476,7 @@ func (this *OAuth2AuthorizationServerFilter) handleRefreshTokenGrant(handler Sec
 	}
 
 	refreshTokenVal := handler.FormValue("refresh_token")
-	auth, err := this.authorizationService.FindByToken(refreshTokenVal, "refresh_token")
+	auth, err := this.authorizationService.ConsumeRefreshToken(refreshTokenVal)
 	if err != nil || auth == nil || auth.RefreshToken == nil {
 		if err != nil {
 			err.LogError()
@@ -479,25 +488,23 @@ func (this *OAuth2AuthorizationServerFilter) handleRefreshTokenGrant(handler Sec
 		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Client ID does not match refresh token")
 	}
 
-	if !auth.RefreshToken.ExpiresAt.IsZero() && time.Now().After(auth.RefreshToken.ExpiresAt) {
-		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Refresh token has expired")
-	}
-
 	accessToken, newRefreshToken, err := this.tokenGenerator.Generate(auth, client)
 	if err != nil {
 		err.LogError()
 		return this.sendTokenError(handler, OAuth2ErrorServerError, "Token generation failed")
 	}
 
-	auth.AccessToken = accessToken
-	if newRefreshToken != nil {
-		auth.RefreshToken = newRefreshToken
-	}
-	if saveErr := this.authorizationService.Save(auth); saveErr != nil {
+	if saveErr := this.authorizationService.SaveTokens(auth.ID, refreshTokenVal, accessToken, newRefreshToken); saveErr != nil {
 		saveErr.LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to save updated tokens")
 	}
 
-	return this.sendTokenSuccess(handler, accessToken, auth.RefreshToken)
+	outRefreshToken := newRefreshToken
+	if outRefreshToken == nil {
+		outRefreshToken = auth.RefreshToken
+	}
+
+	return this.sendTokenSuccess(handler, accessToken, outRefreshToken)
 }
 
 func (this *OAuth2AuthorizationServerFilter) handleJWKS(handler SecurityHandler) error {

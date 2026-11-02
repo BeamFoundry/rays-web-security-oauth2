@@ -41,6 +41,8 @@ type OAuth2AuthorizationService interface {
 	FindByID(id string) (*OAuth2Authorization, Error)
 	FindByToken(token, tokenType string) (*OAuth2Authorization, Error)
 	InvalidateAuthorizationCode(code string) (*OAuth2Authorization, Error)
+	ConsumeRefreshToken(token string) (*OAuth2Authorization, Error)
+	SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error
 }
 
 type trackedTokens struct {
@@ -76,7 +78,10 @@ func NewInMemoryOAuth2AuthorizationService() *InMemoryOAuth2AuthorizationService
 func (this *InMemoryOAuth2AuthorizationService) Save(auth *OAuth2Authorization) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
+	return this.saveLocked(auth)
+}
 
+func (this *InMemoryOAuth2AuthorizationService) saveLocked(auth *OAuth2Authorization) Error {
 	prev := this.tracked[auth.ID]
 
 	var newCode, newAccess, newRefresh string
@@ -186,6 +191,44 @@ func (this *InMemoryOAuth2AuthorizationService) InvalidateAuthorizationCode(code
 
 	auth.AuthorizationCode.Invalidated = true
 	return auth, nil
+}
+
+func (this *InMemoryOAuth2AuthorizationService) ConsumeRefreshToken(token string) (*OAuth2Authorization, Error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+
+	auth, ok := this.byRefreshToken[token]
+	if !ok || auth == nil || auth.RefreshToken == nil {
+		return nil, NewError("InvalidGrantError", "Invalid or unknown refresh token")
+	}
+
+	if auth.RefreshToken.Invalidated || (!auth.RefreshToken.ExpiresAt.IsZero() && time.Now().After(auth.RefreshToken.ExpiresAt)) {
+		return nil, NewError("InvalidGrantError", "Refresh token has expired or was already used")
+	}
+
+	auth.RefreshToken.Invalidated = true
+	return auth, nil
+}
+
+func (this *InMemoryOAuth2AuthorizationService) SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+
+	auth, ok := this.byID[authID]
+	if !ok {
+		return NewError("AuthorizationNotFound", "authorization not found by id: "+authID)
+	}
+
+	if expectedOldRefreshToken != "" && (auth.RefreshToken == nil || auth.RefreshToken.TokenValue != expectedOldRefreshToken) {
+		return NewError("InvalidGrantError", "Refresh token mismatch or already replaced")
+	}
+
+	auth.AccessToken = accessToken
+	if refreshToken != nil {
+		auth.RefreshToken = refreshToken
+	}
+
+	return this.saveLocked(auth)
 }
 
 func (this *InMemoryOAuth2AuthorizationService) FindByID(id string) (*OAuth2Authorization, Error) {

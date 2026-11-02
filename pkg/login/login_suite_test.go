@@ -623,6 +623,23 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(oidcUser.GetIdToken()).NotTo(BeNil())
 			Expect(oidcUser.GetIdToken().TokenValue).To(Equal(rawIdToken))
 			Expect(oidcUser.GetAttributes()).To(HaveKeyWithValue("email", "alice@oidc.com"))
+
+			// 4. Reusing JWKS-backed decoder per RegistrationID
+			regJwks := ClientRegistrationBuilder{}.New("reg-jwks-reuse").
+				ClientID("client-jwks-reuse").
+				JwkSetURI("https://auth.example.com/.well-known/jwks.json").
+				IssuerURI("https://auth.example.com").
+				Build()
+			providerJwks := NewOAuth2LoginAuthenticationProvider(oidcServer.Client(), nil, nil)
+			dec1 := providerJwks.GetOrCreateDecoderForTest(regJwks)
+			Expect(dec1).NotTo(BeNil())
+			dec2 := providerJwks.GetOrCreateDecoderForTest(regJwks)
+			Expect(dec2).To(BeIdenticalTo(dec1))
+
+			// Injected decoder takes precedence over JWKS URI
+			providerInjected := NewOAuth2LoginAuthenticationProvider(oidcServer.Client(), nil, nil).WithJwtDecoder(decoder)
+			decInjected := providerInjected.GetOrCreateDecoderForTest(regJwks)
+			Expect(decInjected).To(BeIdenticalTo(decoder))
 		})
 
 		It("tests DefaultOAuth2UserService with no UserInfoURI, error response and attribute fallback", func() {

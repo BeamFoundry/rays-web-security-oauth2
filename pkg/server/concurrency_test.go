@@ -119,4 +119,96 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 		// All other 49 requests MUST fail
 		Expect(atomic.LoadInt64(&failCount)).To(Equal(int64(49)), "All subsequent parallel replay requests must be rejected")
 	})
+
+	It("strictly enforces single-use refresh token under 50 simultaneous parallel requests", func() {
+		km, err := RSAKeyManager{}.New(2048, "concurrency-rf-key")
+		Expect(err).NotTo(HaveOccurred())
+
+		settings := AuthorizationServerSettings{}.NewDefault("https://auth.beamfoundry.com")
+		encoder := DefaultJwtEncoder{}.New(km)
+		generator := JwtOAuth2TokenGenerator{}.New(encoder, settings.Issuer)
+
+		client := &RegisteredClient{
+			ID:           "race-rf-client-id",
+			ClientID:     "concurrent-rf-app",
+			ClientSecret: "client-secret-xyz",
+			AuthorizationGrantTypes: []AuthorizationGrantType{
+				GrantTypeRefreshToken,
+			},
+			AccessTokenTimeToLive:  15 * time.Minute,
+			RefreshTokenTimeToLive: 30 * 24 * time.Hour,
+		}
+
+		clientRepo := InMemoryRegisteredClientRepository{}.New(client)
+		authService := InMemoryOAuth2AuthorizationService{}.New()
+		contextHolder := &mockSecurityContextHolder{}
+
+		filter := OAuth2AuthorizationServerFilter{}.New(
+			settings,
+			clientRepo,
+			authService,
+			generator,
+			km,
+			contextHolder,
+		)
+
+		router := NewMockSecurityRouter()
+		filter.RegisterSecurityEndpoint(router)
+
+		// Save refresh token in authService
+		refreshTokenVal := "single-use-race-refresh-token-12345"
+		now := time.Now()
+		auth := &OAuth2Authorization{
+			ID:                 "race-rf-auth-id",
+			RegisteredClientID: client.ID,
+			PrincipalName:      "bob",
+			AuthorizedScopes:   []string{"read", "write"},
+			RefreshToken: &OAuth2RefreshToken{
+				TokenValue:  refreshTokenVal,
+				IssuedAt:    now,
+				ExpiresAt:   now.Add(30 * 24 * time.Hour),
+				Invalidated: false,
+			},
+		}
+		Expect(authService.Save(auth)).NotTo(HaveOccurred())
+
+		tokenURI, parseErr := url.Parse("https://auth.beamfoundry.com/oauth2/token")
+		Expect(parseErr).NotTo(HaveOccurred())
+
+		const concurrentRequests = 50
+		var wg sync.WaitGroup
+		startGate := make(chan struct{})
+
+		var successCount int64
+		var failCount int64
+
+		wg.Add(concurrentRequests)
+		for range concurrentRequests {
+			go func() {
+				defer wg.Done()
+				<-startGate // Synchronized parallel blast
+
+				h := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+				h.SetFormValue("client_id", "concurrent-rf-app")
+				h.SetFormValue("client_secret", "client-secret-xyz")
+				h.SetFormValue("grant_type", "refresh_token")
+				h.SetFormValue("refresh_token", refreshTokenVal)
+
+				execErr := router.Execute(h)
+				if execErr == nil && h.Res.Code == 200 {
+					atomic.AddInt64(&successCount, 1)
+				} else {
+					atomic.AddInt64(&failCount, 1)
+				}
+			}()
+		}
+
+		close(startGate) // Release all 50 goroutines at the exact same instant
+		wg.Wait()
+
+		// Exactly one request MUST succeed
+		Expect(atomic.LoadInt64(&successCount)).To(Equal(int64(1)), "Only ONE token exchange must succeed for a refresh token")
+		// All other 49 requests MUST fail
+		Expect(atomic.LoadInt64(&failCount)).To(Equal(int64(49)), "All subsequent parallel replay requests must be rejected")
+	})
 })

@@ -61,15 +61,17 @@ func (this *OAuth2AccessToken) IsExpired() bool {
 
 // OAuth2RefreshToken represents an OAuth 2.0 Refresh Token
 type OAuth2RefreshToken struct {
-	IssuedAt   time.Time `json:"issued_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	TokenValue string    `json:"refresh_token"`
+	IssuedAt    time.Time `json:"issued_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	TokenValue  string    `json:"refresh_token"`
+	Invalidated bool      `json:"invalidated,omitempty"`
 }
 
 func (this OAuth2RefreshToken) New(tokenValue string, issuedAt, expiresAt time.Time) *OAuth2RefreshToken {
 	this.TokenValue = tokenValue
 	this.IssuedAt = issuedAt
 	this.ExpiresAt = expiresAt
+	this.Invalidated = false
 	return &this
 }
 

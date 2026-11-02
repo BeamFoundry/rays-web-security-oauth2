@@ -141,8 +141,8 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 		return nil, NewError("JwtParseError", fmt.Sprintf("failed to parse or verify jwt: %s", err))
 	}
 
-	// Validate standard claims
-	var validateOptions []jwt.ValidateOption
+	// Validate standard claims: expiration is always required
+	validateOptions := []jwt.ValidateOption{jwt.WithRequiredClaim(jwt.ExpirationKey)}
 	if this.clockSkew > 0 {
 		validateOptions = append(validateOptions, jwt.WithAcceptableSkew(this.clockSkew))
 	}

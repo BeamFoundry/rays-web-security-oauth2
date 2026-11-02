@@ -50,7 +50,11 @@ func (this *JwtOAuth2TokenGenerator) Generate(authorization *OAuth2Authorization
 	claimsSet.Audience = []string{client.ClientID}
 	claimsSet.IssuedAt = now
 	claimsSet.ExpiresAt = accessExpiresAt
-	claimsSet.JWTID = fmt.Sprintf("jti-%d", now.UnixNano())
+	jtiBytes := make([]byte, 16)
+	if _, randErr := rand.Read(jtiBytes); randErr != nil {
+		return nil, nil, NewError("CryptoError", fmt.Sprintf("failed to generate jwt id: %s", randErr))
+	}
+	claimsSet.JWTID = "jti-" + base64.RawURLEncoding.EncodeToString(jtiBytes)
 	if len(authorization.AuthorizedScopes) > 0 {
 		claimsSet.Claims["scope"] = strings.Join(authorization.AuthorizedScopes, " ")
 	}

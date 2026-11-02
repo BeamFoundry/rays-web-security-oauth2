@@ -2,6 +2,8 @@ package login
 
 import (
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/client"
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
@@ -20,6 +22,10 @@ func (this *OAuth2LoginAuthenticationProvider) GetUserServiceForTest() OAuth2Use
 
 func (this *OAuth2LoginAuthenticationProvider) GetOidcUserServiceForTest() OidcUserService {
 	return this.oidcUserService
+}
+
+func (this *OAuth2LoginAuthenticationProvider) GetOrCreateDecoderForTest(reg *ClientRegistration) JwtDecoder {
+	return this.getOrCreateDecoder(reg)
 }
 
 func (this *OAuth2LoginAuthenticationFilter) SetInjectedDepsForTest(

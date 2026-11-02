@@ -768,12 +768,18 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(builtURI).To(ContainSubstring("code_challenge=pkce-challenge-123"))
 			Expect(builtURI).To(ContainSubstring("prompt=consent"))
 
-			// BaseURL option
-			authReqBase, err := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://custom-auth.example.com"))
+			// BaseURL option with sub-path prefix
+			authReqBase, err := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://custom-auth.example.com/subapp"))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(authReqBase.RedirectURI).To(Equal("https://custom-auth.example.com/login/oauth2/code/auto-reg"))
+			Expect(authReqBase.RedirectURI).To(Equal("https://custom-auth.example.com/subapp/login/oauth2/code/auto-reg"))
 
-			// Untrusted forwarded headers ignored by default
+			// Invalid BaseURL returns error (invalid scheme, host, or parse error)
+			_, errBadScheme := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("ftp://custom-auth.example.com"))
+			Expect(errBadScheme).To(HaveOccurred())
+			_, errBadHost := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://invalid host/subapp"))
+			Expect(errBadHost).To(HaveOccurred())
+
+			// Untrusted forwarded headers and raw Host header ignored when BaseURL is empty
 			uDummy, pErr := url.Parse("http://internal-host/oauth2/authorization/auto-reg")
 			Expect(pErr).NotTo(HaveOccurred())
 			hUntrusted := NewMockSecurityHandler(HttpMethods.GET, uDummy)
@@ -781,20 +787,21 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			hUntrusted.SetHeader("X-Forwarded-Host", "attacker.example.com")
 			authReqUntrusted, err := GenerateAuthorizationRequest(regNoRedirect, hUntrusted)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(authReqUntrusted.RedirectURI).To(Equal("http://internal-host/login/oauth2/code/auto-reg"))
+			// Does not derive from raw Host or un-trusted proxy; remains relative
+			Expect(authReqUntrusted.RedirectURI).To(Equal("/login/oauth2/code/auto-reg"))
 
 			// Trusted proxy enabled respects forwarded headers
 			authReqTrusted, err := GenerateAuthorizationRequest(regNoRedirect, hUntrusted, WithTrustedProxy(true))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(authReqTrusted.RedirectURI).To(Equal("https://attacker.example.com/login/oauth2/code/auto-reg"))
 
-			// Trusted proxy rejects invalid forwarded host (injection attempt)
+			// Trusted proxy rejects invalid forwarded host (injection attempt) without falling back to raw Host
 			hBadHost := NewMockSecurityHandler(HttpMethods.GET, uDummy)
 			hBadHost.SetHeader("X-Forwarded-Host", "evil.com/payload?foo=bar")
 			authReqBadHost, err := GenerateAuthorizationRequest(regNoRedirect, hBadHost, WithTrustedProxy(true))
 			Expect(err).NotTo(HaveOccurred())
-			// Invalid host is ignored, falling back to request URL host
-			Expect(authReqBadHost.RedirectURI).To(Equal("http://internal-host/login/oauth2/code/auto-reg"))
+			// Invalid host is ignored, remains relative
+			Expect(authReqBadHost.RedirectURI).To(Equal("/login/oauth2/code/auto-reg"))
 
 			// Invalid authorization URI
 			authReqBad := &OAuth2AuthorizationRequest{AuthorizationURI: "://invalid-uri"}
@@ -807,7 +814,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 				AuthorizationURI("https://auth.example.com/oauth/authorize").
 				Build()
 			repo := NewInMemoryClientRegistrationRepository(reg)
-			filter := NewOAuth2LoginAuthenticationFilter(repo, nil, nil)
+			filter := NewOAuth2LoginAuthenticationFilter(repo, nil, nil).WithBaseURL("https://app.example.com")
 
 			router := NewMockSecurityRouter()
 			filter.RegisterSecurityEndpoint(router)

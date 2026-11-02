@@ -12,19 +12,21 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
+	"golang.org/x/sync/singleflight"
 )
 
 // JwxJwtDecoder implements JwtDecoder using github.com/lestrrat-go/jwx/v3
 // Supporting RS256-512, PS256-512, ES256-512, EdDSA, HS256-512, and remote JWKS
 type JwxJwtDecoder struct {
-	keySet    jwk.Set
-	jwksURI   string
-	cache     *jwk.Cache
-	cachedSet jwk.CachedSet
-	initErr   error
-	issuer    string
-	audience  string
-	clockSkew time.Duration
+	keySet       jwk.Set
+	jwksURI      string
+	cache        *jwk.Cache
+	cachedSet    jwk.CachedSet
+	refreshGroup *singleflight.Group
+	initErr      error
+	issuer       string
+	audience     string
+	clockSkew    time.Duration
 }
 
 // NewWithKeySet creates a decoder verifying tokens against a local or static JWK Set
@@ -38,6 +40,7 @@ func (this JwxJwtDecoder) NewWithKeySet(set jwk.Set) *JwxJwtDecoder {
 func (this JwxJwtDecoder) NewWithRemoteJWKS(jwksURI string) *JwxJwtDecoder {
 	this.jwksURI = jwksURI
 	this.clockSkew = 60 * time.Second
+	this.refreshGroup = &singleflight.Group{}
 
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	rcClient := httprc.NewClient(httprc.WithHTTPClient(httpClient))
@@ -48,7 +51,7 @@ func (this JwxJwtDecoder) NewWithRemoteJWKS(jwksURI string) *JwxJwtDecoder {
 		return &this
 	}
 	this.cache = cache
-	if regErr := cache.Register(ctx, jwksURI, jwk.WithWaitReady(false)); regErr != nil {
+	if regErr := cache.Register(ctx, jwksURI, jwk.WithWaitReady(false), jwk.WithHttprcResourceOption(httprc.WithHTTPClient(httpClient))); regErr != nil {
 		this.initErr = regErr
 		return &this
 	}
@@ -99,13 +102,27 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 		isReady := this.cache.Ready(readyCtx, this.jwksURI)
 		readyCancel()
 
-		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
 		if !isReady {
-			if _, err := this.cache.Refresh(lookupCtx, this.jwksURI); err != nil {
-				return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", err))
+			if this.refreshGroup == nil {
+				this.refreshGroup = &singleflight.Group{}
+			}
+			_, refErr, _ := this.refreshGroup.Do(this.jwksURI, func() (any, error) {
+				checkCtx, checkCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+				ready := this.cache.Ready(checkCtx, this.jwksURI)
+				checkCancel()
+				if ready {
+					return struct{}{}, nil
+				}
+				refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+				defer refCancel()
+				return this.cache.Refresh(refCtx, this.jwksURI)
+			})
+			if refErr != nil {
+				return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", refErr))
 			}
 		}
+		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
 		set, err := this.cache.Lookup(lookupCtx, this.jwksURI)
 		if err != nil {
 			return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", err))

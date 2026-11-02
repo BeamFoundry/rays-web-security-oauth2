@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -310,6 +311,36 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(decoded2.Subject()).To(Equal("remote-user"))
 			Expect(fetchCount.Load()).To(Equal(initialFetches))
+
+			// Concurrent decodes coalesce initial fetches
+			var concurrentFetches atomic.Int64
+			tsConcurrent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				concurrentFetches.Add(1)
+				time.Sleep(10 * time.Millisecond) // simulate small network latency
+				w.Header().Set("Content-Type", "application/json")
+				_, writeErr := w.Write(jsonBytes)
+				Expect(writeErr).NotTo(HaveOccurred())
+			}))
+			defer tsConcurrent.Close()
+
+			concurrentDecoder := NewJwxJwtDecoderWithRemoteJWKS(tsConcurrent.URL).
+				WithIssuer("https://remote.example.com").
+				WithAudience("remote-audience").
+				WithClockSkew(60 * time.Second)
+
+			var wg sync.WaitGroup
+			numGoroutines := 10
+			wg.Add(numGoroutines)
+			for i := 0; i < numGoroutines; i++ {
+				go func() {
+					defer wg.Done()
+					dec, decErr := concurrentDecoder.Decode(tok.TokenValue)
+					Expect(decErr).NotTo(HaveOccurred())
+					Expect(dec.Subject()).To(Equal("remote-user"))
+				}()
+			}
+			wg.Wait()
+			Expect(concurrentFetches.Load()).To(BeNumerically("<=", 2))
 
 			// Test audience mismatch
 			decoderWrongAud := NewJwxJwtDecoderWithKeySet(set).

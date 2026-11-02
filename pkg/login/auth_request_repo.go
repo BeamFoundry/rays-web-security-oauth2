@@ -198,30 +198,23 @@ func GenerateAuthorizationRequest(reg *ClientRegistration, args ...any) (*OAuth2
 	if !strings.Contains(redirectURI, "://") {
 		if cfg.BaseURL != "" {
 			base, pErr := url.Parse(cfg.BaseURL)
-			if pErr == nil && base.Scheme != "" && base.Host != "" && isValidHost(base.Host) {
-				if !strings.HasPrefix(redirectURI, "/") {
-					redirectURI = "/" + redirectURI
-				}
-				redirectURI = fmt.Sprintf("%s://%s%s", base.Scheme, base.Host, redirectURI)
+			if pErr != nil {
+				return nil, NewError("InvalidConfigurationError", fmt.Sprintf("invalid BaseURL: %s", pErr))
 			}
-		} else if handler != nil {
-			scheme := schemeHTTP
-			if u := handler.URL(); u != nil && u.Scheme != "" {
-				scheme = u.Scheme
+			if base.Scheme != schemeHTTP && base.Scheme != schemeHTTPS {
+				return nil, NewError("InvalidConfigurationError", fmt.Sprintf("invalid BaseURL scheme %q: must be http or https", base.Scheme))
+			}
+			if base.Host == "" || !isValidHost(base.Host) {
+				return nil, NewError("InvalidConfigurationError", fmt.Sprintf("invalid BaseURL host %q", base.Host))
 			}
 
-			host := ""
-			if h := handler.Header("Host"); h != "" {
-				host = h
-			} else if u := handler.URL(); u != nil && u.Host != "" {
-				host = u.Host
-			}
-
-			if cfg.TrustedProxy {
-				scheme, host = resolveForwardedHeaders(handler, scheme, host)
-			}
-
-			if host != "" && isValidHost(host) {
+			basePath := strings.TrimSuffix(base.Path, "/")
+			relPath := "/" + strings.TrimPrefix(redirectURI, "/")
+			fullPath := basePath + relPath
+			redirectURI = fmt.Sprintf("%s://%s%s", base.Scheme, base.Host, fullPath)
+		} else if handler != nil && cfg.TrustedProxy {
+			scheme, host := resolveForwardedHeaders(handler, schemeHTTP, "")
+			if host != "" && isValidHost(host) && (scheme == schemeHTTP || scheme == schemeHTTPS) {
 				if !strings.HasPrefix(redirectURI, "/") {
 					redirectURI = "/" + redirectURI
 				}

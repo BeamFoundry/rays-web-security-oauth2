@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
@@ -13,7 +15,108 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
-const sessionAuthRequestKey = "oauth2_authorization_request"
+const (
+	sessionAuthRequestKey = "oauth2_authorization_request"
+	schemeHTTP            = "http"
+	schemeHTTPS           = "https"
+)
+
+// AuthorizationRequestConfig holds options for GenerateAuthorizationRequest
+type AuthorizationRequestConfig struct {
+	BaseURL      string
+	TrustedProxy bool
+}
+
+// AuthorizationRequestOption configures an AuthorizationRequestConfig
+type AuthorizationRequestOption func(*AuthorizationRequestConfig)
+
+// WithBaseURL configures a static base URL for resolving relative redirect URIs
+func WithBaseURL(baseURL string) AuthorizationRequestOption {
+	return func(c *AuthorizationRequestConfig) {
+		c.BaseURL = baseURL
+	}
+}
+
+// WithTrustedProxy enables or disables using X-Forwarded-* headers to determine scheme/host/port
+func WithTrustedProxy(trusted bool) AuthorizationRequestOption {
+	return func(c *AuthorizationRequestConfig) {
+		c.TrustedProxy = trusted
+	}
+}
+
+func isHostChar(c rune, idx, length int) bool {
+	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+		return true
+	}
+	return c == '-' && idx > 0 && idx < length-1
+}
+
+func isValidHost(h string) bool {
+	if h == "" || len(h) > 255 {
+		return false
+	}
+	for _, r := range h {
+		if r <= ' ' || r == '/' || r == '\\' || r == '?' || r == '#' || r == '@' {
+			return false
+		}
+	}
+	hostname, port, err := net.SplitHostPort(h)
+	if err == nil {
+		portNum, pErr := strconv.Atoi(port)
+		if pErr != nil || portNum <= 0 || portNum > 65535 {
+			return false
+		}
+		h = hostname
+	}
+	h = strings.Trim(h, "[]")
+	if ip := net.ParseIP(h); ip != nil {
+		return true
+	}
+	for _, part := range strings.Split(h, ".") {
+		if part == "" || len(part) > 63 {
+			return false
+		}
+		for i, c := range part {
+			if !isHostChar(c, i, len(part)) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func resolveForwardedHeaders(handler SecurityHandler, defaultScheme, defaultHost string) (scheme, host string) {
+	scheme = defaultScheme
+	host = defaultHost
+
+	proto := handler.Header("X-Forwarded-Proto")
+	if proto != "" {
+		p := strings.TrimSpace(strings.Split(proto, ",")[0])
+		if p == schemeHTTP || p == schemeHTTPS {
+			scheme = p
+		}
+	}
+
+	fHost := handler.Header("X-Forwarded-Host")
+	if fHost != "" {
+		rawHost := strings.TrimSpace(strings.Split(fHost, ",")[0])
+		if isValidHost(rawHost) {
+			host = rawHost
+		}
+	}
+
+	fPort := handler.Header("X-Forwarded-Port")
+	if fPort != "" && !strings.Contains(host, ":") {
+		portStr := strings.TrimSpace(strings.Split(fPort, ",")[0])
+		if portNum, pErr := strconv.Atoi(portStr); pErr == nil && portNum > 0 && portNum <= 65535 {
+			if (scheme == schemeHTTP && portStr != "80") || (scheme == schemeHTTPS && portStr != "443") {
+				host = host + ":" + portStr
+			}
+		}
+	}
+
+	return scheme, host
+}
 
 // AuthorizationRequestRepository manages persisting authorization requests between the redirect and callback
 type AuthorizationRequestRepository interface {
@@ -52,9 +155,9 @@ func (this *SessionAuthorizationRequestRepository) RemoveAuthorizationRequest(ha
 }
 
 // GenerateAuthorizationRequest creates an authorization request with PKCE and state.
-// If a SecurityHandler is provided, relative redirect URIs and default callback paths
-// are resolved to absolute URIs based on the current request's scheme and host (respecting trusted proxy headers).
-func GenerateAuthorizationRequest(reg *ClientRegistration, handlers ...SecurityHandler) (*OAuth2AuthorizationRequest, Error) {
+// If a SecurityHandler or options are provided, relative redirect URIs and default callback paths
+// are resolved to absolute URIs based on a configured base URL or request host/scheme (respecting trusted proxy setting).
+func GenerateAuthorizationRequest(reg *ClientRegistration, args ...any) (*OAuth2AuthorizationRequest, Error) {
 	// Generate random state
 	stateBytes := make([]byte, 32)
 	if _, err := rand.Read(stateBytes); err != nil {
@@ -76,39 +179,55 @@ func GenerateAuthorizationRequest(reg *ClientRegistration, handlers ...SecurityH
 		redirectURI = "/login/oauth2/code/" + reg.RegistrationID
 	}
 
-	if len(handlers) > 0 && handlers[0] != nil && !strings.Contains(redirectURI, "://") {
-		handler := handlers[0]
-		scheme := "http"
-		proto := handler.Header("X-Forwarded-Proto")
-		if proto != "" {
-			parts := strings.Split(proto, ",")
-			scheme = strings.TrimSpace(parts[0])
-		} else if u := handler.URL(); u != nil && u.Scheme != "" {
-			scheme = u.Scheme
+	var handler SecurityHandler
+	var cfg AuthorizationRequestConfig
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case SecurityHandler:
+			handler = v
+		case AuthorizationRequestOption:
+			v(&cfg)
+		case *AuthorizationRequestConfig:
+			if v != nil {
+				cfg = *v
+			}
+		default:
 		}
+	}
 
-		host := "localhost"
-		fHost := handler.Header("X-Forwarded-Host")
-		if fHost != "" {
-			parts := strings.Split(fHost, ",")
-			host = strings.TrimSpace(parts[0])
-		} else if h := handler.Header("Host"); h != "" {
-			host = h
-		} else if u := handler.URL(); u != nil && u.Host != "" {
-			host = u.Host
-		}
+	if !strings.Contains(redirectURI, "://") {
+		if cfg.BaseURL != "" {
+			base, pErr := url.Parse(cfg.BaseURL)
+			if pErr == nil && base.Scheme != "" && base.Host != "" && isValidHost(base.Host) {
+				if !strings.HasPrefix(redirectURI, "/") {
+					redirectURI = "/" + redirectURI
+				}
+				redirectURI = fmt.Sprintf("%s://%s%s", base.Scheme, base.Host, redirectURI)
+			}
+		} else if handler != nil {
+			scheme := schemeHTTP
+			if u := handler.URL(); u != nil && u.Scheme != "" {
+				scheme = u.Scheme
+			}
 
-		if fPort := handler.Header("X-Forwarded-Port"); fPort != "" && !strings.Contains(host, ":") {
-			portStr := strings.TrimSpace(strings.Split(fPort, ",")[0])
-			if (scheme == "http" && portStr != "80") || (scheme == "https" && portStr != "443") {
-				host = host + ":" + portStr
+			host := ""
+			if h := handler.Header("Host"); h != "" {
+				host = h
+			} else if u := handler.URL(); u != nil && u.Host != "" {
+				host = u.Host
+			}
+
+			if cfg.TrustedProxy {
+				scheme, host = resolveForwardedHeaders(handler, scheme, host)
+			}
+
+			if host != "" && isValidHost(host) {
+				if !strings.HasPrefix(redirectURI, "/") {
+					redirectURI = "/" + redirectURI
+				}
+				redirectURI = fmt.Sprintf("%s://%s%s", scheme, host, redirectURI)
 			}
 		}
-
-		if !strings.HasPrefix(redirectURI, "/") {
-			redirectURI = "/" + redirectURI
-		}
-		redirectURI = fmt.Sprintf("%s://%s%s", scheme, host, redirectURI)
 	}
 
 	return &OAuth2AuthorizationRequest{

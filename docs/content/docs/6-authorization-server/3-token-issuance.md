@@ -61,4 +61,4 @@ encoder := JwxJwtEncoder{}.New(rsaPrivateKey, jwa.PS256(), "key-ps256")
 ```
 
 > [!IMPORTANT]
-> The `/oauth2/jwks` endpoint serves the public keys from the separately configured `JWKSource` Beam, **not** directly from `JwxJwtEncoder`. When configuring a custom token encoder (such as the ES256, EdDSA, or PS256 examples above), ensure that your registered `JWKSource` and the encoder share the exact same underlying key material and key identifier (`kid`) so that client applications and Resource Servers can successfully verify token signatures.
+> The `/oauth2/jwks` endpoint serves the public keys from the separately configured `JWKSource` Beam, **not** directly from `JwxJwtEncoder`. When configuring a custom token encoder (such as the ES256, EdDSA, or PS256 examples above), ensure that your registered `JWKSource` and the encoder share the exact same underlying key material, key identifier (`kid`), and published algorithm (`alg`) so that client applications, Resource Servers, and decoders such as Spring's `NimbusJwtDecoder` can successfully verify token signatures.

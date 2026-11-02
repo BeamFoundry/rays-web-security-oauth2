@@ -19,6 +19,7 @@ type AuthorizationCode struct {
 	CodeChallenge       string    `json:"code_challenge"`
 	CodeChallengeMethod string    `json:"code_challenge_method"`
 	RedirectURI         string    `json:"redirect_uri"`
+	RedirectURISupplied bool      `json:"redirect_uri_supplied"`
 	Invalidated         bool      `json:"invalidated"`
 }
 

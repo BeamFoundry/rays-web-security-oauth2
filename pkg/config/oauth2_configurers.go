@@ -23,6 +23,8 @@ type OAuth2LoginConfigurer struct {
 	defaultRegistrationID  string
 	loginProcessingURL     string
 	authorizationBaseURI   string
+	baseURL                string
+	trustedProxy           bool
 }
 
 func (this OAuth2LoginConfigurer) New(builder *HttpSecurityBuilder) *OAuth2LoginConfigurer {
@@ -75,6 +77,16 @@ func (this *OAuth2LoginConfigurer) AuthorizationBaseURI(uri string) *OAuth2Login
 	return this
 }
 
+func (this *OAuth2LoginConfigurer) BaseURL(url string) *OAuth2LoginConfigurer {
+	this.baseURL = url
+	return this
+}
+
+func (this *OAuth2LoginConfigurer) TrustedProxy(trusted bool) *OAuth2LoginConfigurer {
+	this.trustedProxy = trusted
+	return this
+}
+
 func (this *OAuth2LoginConfigurer) And() *HttpSecurityBuilder {
 	cfg := &OAuth2LoginConfig{
 		ClientRegistrationRepository: this.clientRegistrationRepo,
@@ -85,6 +97,8 @@ func (this *OAuth2LoginConfigurer) And() *HttpSecurityBuilder {
 		DefaultSuccessURL:            this.defaultSuccessURL,
 		LoginProcessingURL:           this.loginProcessingURL,
 		AuthorizationBaseURI:         this.authorizationBaseURI,
+		BaseURL:                      this.baseURL,
+		TrustedProxy:                 this.trustedProxy,
 	}
 	this.builder.AddCustomSecurityFilter("oAuth2LoginAuthenticationFilter", cfg)
 	return this.builder

@@ -64,14 +64,14 @@ An essential design principle of Rays Web Security is its pluggable provider arc
 │ • Auth Code Flow │ • Refresh Token  │ • JWT Decoder    │ • /authorize  │
 │ • PKCE (S256)    │ • Client Creds   │ • Claims to Auth │ • /token      │
 │ • OIDC id_token  │ • API Helper     │ • JWKS Rotation  │ • /jwks       │
-│ • UserInfo Sync  │ • AuthorizedMgr  │ • RFC 7662 Intro │ • Discovery   │
+│ • UserInfo Sync  │ • AuthorizedMgr  │ • Scopes / Roles │ • /introspect │
 └──────────────────┴──────────────────┴──────────────────┴───────────────┘
 ```
 
 1. **OAuth2 Login (`pkg/login`):** Enables user authentication into your web application via external identity providers (Google, GitHub, Keycloak, etc.) with automatic session establishment.
 2. **OAuth2 Client (`pkg/client`):** Manages OAuth2 client credentials, access tokens, refresh tokens, and outbound authorized API requests.
-3. **OAuth2 Resource Server (`pkg/resourceserver`):** Protects HTTP APIs by validating incoming Bearer JWT or opaque tokens against signatures, expiration, issuers, and audiences.
-4. **OAuth2 Authorization Server (`pkg/server`):** Full RFC 6749 / OAuth 2.1 Authorization Server that authenticates clients, validates authorization codes with PKCE, and issues signed JWTs.
+3. **OAuth2 Resource Server (`pkg/resourceserver`):** Protects HTTP APIs by validating incoming Bearer JWT tokens against signatures, expiration, issuers, and audiences.
+4. **OAuth2 Authorization Server (`pkg/server`):** OAuth 2.1 Authorization Server that authenticates clients, validates authorization codes with PKCE, and issues signed JWTs (without OpenID Connect ID token issuance).
 
 ---
 
@@ -82,7 +82,7 @@ An essential design principle of Rays Web Security is its pluggable provider arc
 *   `.../pkg/jwt`: Cryptographic JWT signing (RSA/HMAC), verification, validation, and JSON Web Key Sets (`JWK`, `JWKSet`, `JWKSource`).
 *   `.../pkg/client`: Client repository, authorized client service, and authorized client manager.
 *   `.../pkg/login`: OAuth2 login filter, authorization code exchange, and UserInfo/OIDC services.
-*   `.../pkg/resourceserver`: Bearer token filter, token resolver, and JWT/Opaque authentication providers.
+*   `.../pkg/resourceserver`: Bearer token filter, token resolver, and JWT authentication provider.
 *   `.../pkg/server`: Authorization Server filter, endpoints (`/token`, `/authorize`, `/jwks`, `/introspect`, `/revoke`), and token generators.
 *   `.../pkg/config`: Fluent configurers for `HttpSecurityBuilder`.
 

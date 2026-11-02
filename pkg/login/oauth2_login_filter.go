@@ -23,6 +23,8 @@ type OAuth2LoginConfig struct {
 	DefaultSuccessURL            string
 	LoginProcessingURL           string
 	AuthorizationBaseURI         string
+	BaseURL                      string
+	TrustedProxy                 bool
 }
 
 // OAuth2LoginAuthenticationFilter handles OAuth2 authorization request redirection and code callback processing
@@ -43,6 +45,8 @@ type OAuth2LoginAuthenticationFilter struct {
 	defaultSuccessURL      string
 	loginProcessingURL     string
 	authorizationBaseURI   string
+	baseURL                string
+	trustedProxy           bool
 }
 
 var _, _ = any(&OAuth2LoginAuthenticationFilter{}).(Stereotype)
@@ -86,6 +90,16 @@ func (this *OAuth2LoginAuthenticationFilter) WithDefaultSuccessURL(url string) *
 	return this
 }
 
+func (this *OAuth2LoginAuthenticationFilter) WithBaseURL(url string) *OAuth2LoginAuthenticationFilter {
+	this.baseURL = url
+	return this
+}
+
+func (this *OAuth2LoginAuthenticationFilter) WithTrustedProxy(trusted bool) *OAuth2LoginAuthenticationFilter {
+	this.trustedProxy = trusted
+	return this
+}
+
 func (this *OAuth2LoginAuthenticationFilter) Config() *OAuth2LoginConfig {
 	if this.config == nil {
 		this.config = &OAuth2LoginConfig{
@@ -97,6 +111,8 @@ func (this *OAuth2LoginAuthenticationFilter) Config() *OAuth2LoginConfig {
 			DefaultSuccessURL:            this.defaultSuccessURL,
 			LoginProcessingURL:           this.loginProcessingURL,
 			AuthorizationBaseURI:         this.authorizationBaseURI,
+			BaseURL:                      this.baseURL,
+			TrustedProxy:                 this.trustedProxy,
 		}
 	}
 	return this.config
@@ -155,6 +171,10 @@ func (this *OAuth2LoginAuthenticationFilter) WithContext(ctx context.Context) Er
 		if cfg.AuthorizationBaseURI != "" {
 			this.authorizationBaseURI = cfg.AuthorizationBaseURI
 		}
+		if cfg.BaseURL != "" {
+			this.baseURL = cfg.BaseURL
+		}
+		this.trustedProxy = cfg.TrustedProxy
 	}
 	if this.authRequestRepo == nil {
 		this.authRequestRepo = SessionAuthorizationRequestRepository{}.New()
@@ -184,7 +204,12 @@ func (this *OAuth2LoginAuthenticationFilter) RegisterSecurityEndpoint(router Sec
 				return handler.Error(404, "Client registration not found: "+registrationID)
 			}
 
-			authReq, genErr := GenerateAuthorizationRequest(reg, handler)
+			authReq, genErr := GenerateAuthorizationRequest(
+				reg,
+				handler,
+				WithBaseURL(this.baseURL),
+				WithTrustedProxy(this.trustedProxy),
+			)
 			if genErr != nil {
 				genErr.LogError()
 				return handler.Error(500, "Failed to generate authorization request: "+genErr.Error())

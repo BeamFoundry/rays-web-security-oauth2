@@ -1037,6 +1037,90 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			stillThere, findErr := authService.FindByToken("foreign-at", "access_token")
 			Expect(findErr).NotTo(HaveOccurred())
 			Expect(stillThere.ID).To(Equal("foreign-auth"))
+
+			// 27a. Mismatch at /token is rejected
+			codeOmittedURIAuth := &OAuth2Authorization{
+				ID:                 "omitted-uri-auth-1",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-omitted-uri",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "code-omitted-uri-1",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					RedirectURISupplied: false,
+				},
+			}
+			Expect(authService.Save(codeOmittedURIAuth)).NotTo(HaveOccurred())
+			hTokenMismatch := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hTokenMismatch.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hTokenMismatch.SetFormValue("grant_type", "authorization_code")
+			hTokenMismatch.SetFormValue("code", "code-omitted-uri-1")
+			hTokenMismatch.SetFormValue("redirect_uri", "https://other.example.com/wrong")
+			Expect(router.Execute(hTokenMismatch)).To(HaveOccurred())
+
+			// 27b. Omission at /token is accepted
+			codeOmittedURIAuth2 := &OAuth2Authorization{
+				ID:                 "omitted-uri-auth-2",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-omitted-uri-2",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "code-omitted-uri-2",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					RedirectURISupplied: false,
+				},
+			}
+			Expect(authService.Save(codeOmittedURIAuth2)).NotTo(HaveOccurred())
+			hTokenOmitted := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hTokenOmitted.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hTokenOmitted.SetFormValue("grant_type", "authorization_code")
+			hTokenOmitted.SetFormValue("code", "code-omitted-uri-2")
+			Expect(router.Execute(hTokenOmitted)).To(Succeed())
+
+			// 28. redirect_uri supplied at /authorize requires exact match at /token (rejects omission)
+			codeSuppliedURIAuth := &OAuth2Authorization{
+				ID:                 "supplied-uri-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-supplied-uri",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "code-supplied-uri",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					RedirectURISupplied: true,
+				},
+			}
+			Expect(authService.Save(codeSuppliedURIAuth)).NotTo(HaveOccurred())
+
+			// 28a. Omission at /token rejected when supplied at /authorize
+			hTokenOmitWhenSupplied := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hTokenOmitWhenSupplied.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hTokenOmitWhenSupplied.SetFormValue("grant_type", "authorization_code")
+			hTokenOmitWhenSupplied.SetFormValue("code", "code-supplied-uri")
+			Expect(router.Execute(hTokenOmitWhenSupplied)).To(HaveOccurred())
+
+			// 28b. Exact match accepted
+			codeSuppliedURIAuth2 := &OAuth2Authorization{
+				ID:                 "supplied-uri-auth-2",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-supplied-uri-2",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "code-supplied-uri-2",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					RedirectURISupplied: true,
+				},
+			}
+			Expect(authService.Save(codeSuppliedURIAuth2)).NotTo(HaveOccurred())
+			hTokenExactMatch := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hTokenExactMatch.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hTokenExactMatch.SetFormValue("grant_type", "authorization_code")
+			hTokenExactMatch.SetFormValue("code", "code-supplied-uri-2")
+			hTokenExactMatch.SetFormValue("redirect_uri", registeredClient.RedirectURIs[0])
+			Expect(router.Execute(hTokenExactMatch)).To(Succeed())
 		})
 	})
 })

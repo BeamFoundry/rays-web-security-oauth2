@@ -218,7 +218,8 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		return handler.Error(http.StatusBadRequest, "Client is not authorized for authorization_code grant")
 	}
 
-	if redirectURI == "" {
+	redirectURISupplied := redirectURI != ""
+	if !redirectURISupplied {
 		if len(client.RedirectURIs) != 1 {
 			return handler.Error(http.StatusBadRequest, "Missing redirect_uri and client does not have exactly one registered redirect URI")
 		}
@@ -280,6 +281,7 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
 		RedirectURI:         redirectURI,
+		RedirectURISupplied: redirectURISupplied,
 		Invalidated:         false,
 	}
 
@@ -399,7 +401,11 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorizationCodeGrant(handle
 		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Client ID does not match authorization code")
 	}
 
-	if auth.AuthorizationCode.RedirectURI != "" && auth.AuthorizationCode.RedirectURI != redirectURI {
+	if auth.AuthorizationCode.RedirectURISupplied {
+		if redirectURI != auth.AuthorizationCode.RedirectURI {
+			return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Redirect URI mismatch")
+		}
+	} else if redirectURI != "" && redirectURI != auth.AuthorizationCode.RedirectURI {
 		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Redirect URI mismatch")
 	}
 

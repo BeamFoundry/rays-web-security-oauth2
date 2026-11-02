@@ -768,6 +768,34 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(builtURI).To(ContainSubstring("code_challenge=pkce-challenge-123"))
 			Expect(builtURI).To(ContainSubstring("prompt=consent"))
 
+			// BaseURL option
+			authReqBase, err := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://custom-auth.example.com"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(authReqBase.RedirectURI).To(Equal("https://custom-auth.example.com/login/oauth2/code/auto-reg"))
+
+			// Untrusted forwarded headers ignored by default
+			uDummy, pErr := url.Parse("http://internal-host/oauth2/authorization/auto-reg")
+			Expect(pErr).NotTo(HaveOccurred())
+			hUntrusted := NewMockSecurityHandler(HttpMethods.GET, uDummy)
+			hUntrusted.SetHeader("X-Forwarded-Proto", "https")
+			hUntrusted.SetHeader("X-Forwarded-Host", "attacker.example.com")
+			authReqUntrusted, err := GenerateAuthorizationRequest(regNoRedirect, hUntrusted)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(authReqUntrusted.RedirectURI).To(Equal("http://internal-host/login/oauth2/code/auto-reg"))
+
+			// Trusted proxy enabled respects forwarded headers
+			authReqTrusted, err := GenerateAuthorizationRequest(regNoRedirect, hUntrusted, WithTrustedProxy(true))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(authReqTrusted.RedirectURI).To(Equal("https://attacker.example.com/login/oauth2/code/auto-reg"))
+
+			// Trusted proxy rejects invalid forwarded host (injection attempt)
+			hBadHost := NewMockSecurityHandler(HttpMethods.GET, uDummy)
+			hBadHost.SetHeader("X-Forwarded-Host", "evil.com/payload?foo=bar")
+			authReqBadHost, err := GenerateAuthorizationRequest(regNoRedirect, hBadHost, WithTrustedProxy(true))
+			Expect(err).NotTo(HaveOccurred())
+			// Invalid host is ignored, falling back to request URL host
+			Expect(authReqBadHost.RedirectURI).To(Equal("http://internal-host/login/oauth2/code/auto-reg"))
+
 			// Invalid authorization URI
 			authReqBad := &OAuth2AuthorizationRequest{AuthorizationURI: "://invalid-uri"}
 			Expect(BuildAuthorizationURI(authReqBad)).To(Equal("://invalid-uri"))

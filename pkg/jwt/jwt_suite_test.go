@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -274,9 +275,9 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			jsonBytes, err := json.Marshal(set)
 			Expect(err).NotTo(HaveOccurred())
 
-			var fetchCount int
+			var fetchCount atomic.Int64
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				fetchCount++
+				fetchCount.Add(1)
 				w.Header().Set("Content-Type", "application/json")
 				_, writeErr := w.Write(jsonBytes)
 				Expect(writeErr).NotTo(HaveOccurred())
@@ -303,12 +304,12 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(decoded.Subject()).To(Equal("remote-user"))
 
-			initialFetches := fetchCount
+			initialFetches := fetchCount.Load()
 			// Second decode reuses cached key set without additional HTTP fetch
 			decoded2, err := decoder.Decode(tok.TokenValue)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(decoded2.Subject()).To(Equal("remote-user"))
-			Expect(fetchCount).To(Equal(initialFetches))
+			Expect(fetchCount.Load()).To(Equal(initialFetches))
 
 			// Test audience mismatch
 			decoderWrongAud := NewJwxJwtDecoderWithKeySet(set).

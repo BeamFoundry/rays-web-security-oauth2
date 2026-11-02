@@ -2,7 +2,6 @@ package resourceserver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
@@ -29,18 +28,11 @@ type jwtAuthenticationManager struct {
 }
 
 func (this *jwtAuthenticationManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
-	if this.fallback != nil {
-		res, authEx := this.fallback.Authenticate(auth)
-		if authEx == nil {
-			return res, nil
-		}
-		var pnf *ProviderNotFoundException
-		if !errors.As(authEx, &pnf) && authEx.Name() != "ProviderNotFoundException" {
-			return res, authEx
-		}
-	}
 	if this.provider != nil && this.provider.Supports(auth) {
 		return this.provider.Authenticate(auth)
+	}
+	if this.fallback != nil {
+		return this.fallback.Authenticate(auth)
 	}
 	return auth, ProviderNotFoundException{}.New("No AuthenticationProvider found for authentication", auth)
 }
@@ -58,7 +50,6 @@ type BearerTokenAuthenticationFilter struct {
 	injectedAuthManager   Optional[AuthenticationManager]      `@:"Inject"`
 	injectedContextHolder Optional[SecurityContextHolder]      `@:"Inject"`
 	injectedJwtDecoder    Optional[JwtDecoder]                 `@:"Inject"`
-	injectedJwtProvider   Optional[*JwtAuthenticationProvider] `@:"Inject"`
 	injectedConverter     Optional[JwtAuthenticationConverter] `@:"Inject"`
 	realmName             string
 }
@@ -165,11 +156,6 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 	}
 	if this.realmName == "" {
 		this.realmName = "rays-web-security-oauth2"
-	}
-	if jwtProv, ok := this.injectedJwtProvider.Get(); ok {
-		if this.jwtDecoder != nil {
-			jwtProv.WithDecoder(this.jwtDecoder)
-		}
 	}
 	if this.jwtDecoder != nil {
 		jwtProvider := JwtAuthenticationProvider{}.New(this.jwtDecoder)

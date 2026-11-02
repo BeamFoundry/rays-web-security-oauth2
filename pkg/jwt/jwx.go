@@ -95,9 +95,13 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 		if this.initErr != nil {
 			return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to initialize remote jwks cache: %s", this.initErr))
 		}
+		readyCtx, readyCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		isReady := this.cache.Ready(readyCtx, this.jwksURI)
+		readyCancel()
+
 		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if !this.cache.Ready(lookupCtx, this.jwksURI) {
+		if !isReady {
 			if _, err := this.cache.Refresh(lookupCtx, this.jwksURI); err != nil {
 				return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", err))
 			}

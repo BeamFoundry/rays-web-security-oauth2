@@ -245,6 +245,9 @@ func BuildAuthorizationURI(req *OAuth2AuthorizationRequest) string {
 	}
 
 	q := u.Query()
+	for k, v := range req.AdditionalParams {
+		q.Set(k, v)
+	}
 	q.Set("response_type", "code")
 	q.Set("client_id", req.ClientID)
 	q.Set("redirect_uri", req.RedirectURI)
@@ -255,9 +258,6 @@ func BuildAuthorizationURI(req *OAuth2AuthorizationRequest) string {
 	if req.CodeChallenge != "" {
 		q.Set("code_challenge", req.CodeChallenge)
 		q.Set("code_challenge_method", req.CodeChallengeMethod)
-	}
-	for k, v := range req.AdditionalParams {
-		q.Set(k, v)
 	}
 
 	u.RawQuery = q.Encode()

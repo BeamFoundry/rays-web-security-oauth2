@@ -861,11 +861,19 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(authReq.RedirectURI).To(Equal("/login/oauth2/code/auto-reg"))
 
 			// BuildAuthorizationURI with CodeChallenge and AdditionalParams
+			authReq.State = "generated-state-abc"
 			authReq.CodeChallenge = "pkce-challenge-123"
 			authReq.CodeChallengeMethod = "S256"
-			authReq.AdditionalParams = map[string]string{"prompt": "consent"}
+			authReq.AdditionalParams = map[string]string{
+				"prompt":         "consent",
+				"state":          "malicious-override-state",
+				"code_challenge": "malicious-override-pkce",
+			}
 			builtURI := BuildAuthorizationURI(authReq)
 			Expect(builtURI).To(ContainSubstring("code_challenge=pkce-challenge-123"))
+			Expect(builtURI).To(ContainSubstring("state=generated-state-abc"))
+			Expect(builtURI).NotTo(ContainSubstring("malicious-override-state"))
+			Expect(builtURI).NotTo(ContainSubstring("malicious-override-pkce"))
 			Expect(builtURI).To(ContainSubstring("prompt=consent"))
 
 			// BaseURL option with sub-path prefix

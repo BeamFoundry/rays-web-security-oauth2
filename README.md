@@ -546,6 +546,20 @@ func NewRemoteApiClient(clientManager OAuth2AuthorizedClientManager) *RemoteApiC
                 if req.URL.Scheme != "https" {
                     return fmt.Errorf("redirect target must use HTTPS: %s", req.URL.String())
                 }
+                if len(via) > 0 {
+                    initial := via[0].URL
+                    initPort := initial.Port()
+                    if initPort == "" {
+                        initPort = "443"
+                    }
+                    reqPort := req.URL.Port()
+                    if reqPort == "" {
+                        reqPort = "443"
+                    }
+                    if req.URL.Scheme != initial.Scheme || req.URL.Hostname() != initial.Hostname() || reqPort != initPort {
+                        return fmt.Errorf("redirect outside original trusted origin rejected: %s", req.URL.String())
+                    }
+                }
                 return nil
             },
         },

@@ -227,12 +227,13 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			ClientSecret("google-secret").
 			AuthorizationURI("https://accounts.google.com/o/oauth2/v2/auth").
 			TokenURI("https://oauth2.googleapis.com/token").
+			RedirectURI("https://my-app.com/login/oauth2/code/google").
 			Build()
 
 		regRepo = InMemoryClientRegistrationRepository{}.New(reg)
 		authManager = &mockAuthManager{}
 		contextHolder = &mockSecurityContextHolder{}
-		filter = OAuth2LoginAuthenticationFilter{}.New(regRepo, authManager, contextHolder)
+		filter = OAuth2LoginAuthenticationFilter{}.New(regRepo, authManager, contextHolder).WithBaseURL("https://my-app.com")
 	})
 
 	Context("Authorization initiation endpoint", func() {
@@ -510,7 +511,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Name()).To(Equal("InvalidUserInfoResponse"))
 
-			// Missing UserInfo or IdToken subject rejected
+			// Missing IdToken subject rejected with InvalidUserError before UserInfo branch
 			userReqMissingSub := &OidcUserRequest{
 				ClientRegistration: reg,
 				AccessToken:        token,
@@ -522,7 +523,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			}
 			_, err = oidcSvc.LoadUser(userReqMissingSub)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Name()).To(Equal("InvalidUserInfoResponse"))
+			Expect(err.Name()).To(Equal("InvalidUserError"))
 		})
 
 		It("tests OAuth2LoginAuthenticationProvider PostConstruct, OIDC flow, and error branches", func() {
@@ -851,35 +852,49 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 		})
 
 		It("tests GenerateAuthorizationRequest and BuildAuthorizationURI edge cases", func() {
-			// RedirectURI defaulting
+			// RedirectURI defaulting requires BaseURL or trusted proxy to resolve absolute URI
 			regNoRedirect := ClientRegistrationBuilder{}.New("auto-reg").
 				ClientID("client-auto").
 				AuthorizationURI("https://auth.example.com/oauth/authorize").
 				Build()
-			authReq, err := GenerateAuthorizationRequest(regNoRedirect)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(authReq.RedirectURI).To(Equal("/login/oauth2/code/auto-reg"))
+			_, errNoBase := GenerateAuthorizationRequest(regNoRedirect)
+			Expect(errNoBase).To(HaveOccurred())
+			Expect(errNoBase.Name()).To(Equal("InvalidConfigurationError"))
 
-			// BuildAuthorizationURI with CodeChallenge and AdditionalParams
+			// BaseURL option with sub-path prefix resolves absolute URI
+			authReqBase, err := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://custom-auth.example.com/subapp"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(authReqBase.RedirectURI).To(Equal("https://custom-auth.example.com/subapp/login/oauth2/code/auto-reg"))
+
+			// BuildAuthorizationURI with CodeChallenge and AdditionalParams collision checks
+			authReq := authReqBase
+			authReq.ClientID = "client-auto"
 			authReq.State = "generated-state-abc"
 			authReq.CodeChallenge = "pkce-challenge-123"
 			authReq.CodeChallengeMethod = "S256"
 			authReq.AdditionalParams = map[string]string{
-				"prompt":         "consent",
-				"state":          "malicious-override-state",
-				"code_challenge": "malicious-override-pkce",
+				"prompt":                "consent",
+				"state":                 "malicious-override-state",
+				"code_challenge":        "malicious-override-pkce",
+				"code_challenge_method": "plain",
+				"client_id":             "malicious-client",
+				"redirect_uri":          "https://evil.com/callback",
+				"response_type":         "token",
 			}
 			builtURI := BuildAuthorizationURI(authReq)
+			Expect(builtURI).To(ContainSubstring("client_id=client-auto"))
+			Expect(builtURI).To(ContainSubstring("response_type=code"))
 			Expect(builtURI).To(ContainSubstring("code_challenge=pkce-challenge-123"))
+			Expect(builtURI).To(ContainSubstring("code_challenge_method=S256"))
 			Expect(builtURI).To(ContainSubstring("state=generated-state-abc"))
+			Expect(builtURI).To(ContainSubstring("redirect_uri=" + url.QueryEscape(authReq.RedirectURI)))
 			Expect(builtURI).NotTo(ContainSubstring("malicious-override-state"))
 			Expect(builtURI).NotTo(ContainSubstring("malicious-override-pkce"))
+			Expect(builtURI).NotTo(ContainSubstring("code_challenge_method=plain"))
+			Expect(builtURI).NotTo(ContainSubstring("malicious-client"))
+			Expect(builtURI).NotTo(ContainSubstring("evil.com"))
+			Expect(builtURI).NotTo(ContainSubstring("response_type=token"))
 			Expect(builtURI).To(ContainSubstring("prompt=consent"))
-
-			// BaseURL option with sub-path prefix
-			authReqBase, err := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://custom-auth.example.com/subapp"))
-			Expect(err).NotTo(HaveOccurred())
-			Expect(authReqBase.RedirectURI).To(Equal("https://custom-auth.example.com/subapp/login/oauth2/code/auto-reg"))
 
 			// Invalid BaseURL returns error (invalid scheme, host, or parse error)
 			_, errBadScheme := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("ftp://custom-auth.example.com"))
@@ -887,29 +902,27 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			_, errBadHost := GenerateAuthorizationRequest(regNoRedirect, WithBaseURL("https://invalid host/subapp"))
 			Expect(errBadHost).To(HaveOccurred())
 
-			// Untrusted forwarded headers and raw Host header ignored when BaseURL is empty
+			// Untrusted forwarded headers and raw Host header ignored when BaseURL is empty -> returns InvalidConfigurationError
 			uDummy, pErr := url.Parse("http://internal-host/oauth2/authorization/auto-reg")
 			Expect(pErr).NotTo(HaveOccurred())
 			hUntrusted := NewMockSecurityHandler(HttpMethods.GET, uDummy)
 			hUntrusted.SetHeader("X-Forwarded-Proto", "https")
 			hUntrusted.SetHeader("X-Forwarded-Host", "attacker.example.com")
-			authReqUntrusted, err := GenerateAuthorizationRequest(regNoRedirect, hUntrusted)
-			Expect(err).NotTo(HaveOccurred())
-			// Does not derive from raw Host or un-trusted proxy; remains relative
-			Expect(authReqUntrusted.RedirectURI).To(Equal("/login/oauth2/code/auto-reg"))
+			_, errUntrusted := GenerateAuthorizationRequest(regNoRedirect, hUntrusted)
+			Expect(errUntrusted).To(HaveOccurred())
+			Expect(errUntrusted.Name()).To(Equal("InvalidConfigurationError"))
 
 			// Trusted proxy enabled respects forwarded headers
 			authReqTrusted, err := GenerateAuthorizationRequest(regNoRedirect, hUntrusted, WithTrustedProxy(true))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(authReqTrusted.RedirectURI).To(Equal("https://attacker.example.com/login/oauth2/code/auto-reg"))
 
-			// Trusted proxy rejects invalid forwarded host (injection attempt) without falling back to raw Host
+			// Trusted proxy rejects invalid forwarded host (injection attempt) without falling back to raw Host -> returns InvalidConfigurationError
 			hBadHost := NewMockSecurityHandler(HttpMethods.GET, uDummy)
 			hBadHost.SetHeader("X-Forwarded-Host", "evil.com/payload?foo=bar")
-			authReqBadHost, err := GenerateAuthorizationRequest(regNoRedirect, hBadHost, WithTrustedProxy(true))
-			Expect(err).NotTo(HaveOccurred())
-			// Invalid host is ignored, remains relative
-			Expect(authReqBadHost.RedirectURI).To(Equal("/login/oauth2/code/auto-reg"))
+			_, errBadHostProxy := GenerateAuthorizationRequest(regNoRedirect, hBadHost, WithTrustedProxy(true))
+			Expect(errBadHostProxy).To(HaveOccurred())
+			Expect(errBadHostProxy.Name()).To(Equal("InvalidConfigurationError"))
 
 			// Invalid authorization URI
 			authReqBad := &OAuth2AuthorizationRequest{AuthorizationURI: "://invalid-uri"}

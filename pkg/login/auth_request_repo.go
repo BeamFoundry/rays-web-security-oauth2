@@ -223,6 +223,11 @@ func GenerateAuthorizationRequest(reg *ClientRegistration, args ...any) (*OAuth2
 		}
 	}
 
+	u, pErr := url.Parse(redirectURI)
+	if pErr != nil || !u.IsAbs() {
+		return nil, NewError("InvalidConfigurationError", "redirect_uri must be an absolute URI: configure a valid BaseURL or valid trusted forwarded headers")
+	}
+
 	return &OAuth2AuthorizationRequest{
 		AuthorizationURI:    reg.ProviderDetails.AuthorizationURI,
 		ClientID:            reg.ClientID,

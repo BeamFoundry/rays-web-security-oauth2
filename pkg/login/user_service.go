@@ -133,6 +133,16 @@ func (this *DefaultOidcUserService) LoadUser(userRequest *OidcUserRequest) (Oidc
 		authorities = append(authorities, Authority("SCOPE_"+scope))
 	}
 
+	var idTokenSub string
+	if userRequest.IdToken != nil && userRequest.IdToken.Claims != nil {
+		if s, ok := userRequest.IdToken.Claims[subClaimName].(string); ok && s != "" {
+			idTokenSub = s
+		}
+	}
+	if idTokenSub == "" {
+		return nil, NewError("InvalidUserError", fmt.Sprintf("id_token %q claim is missing or empty", subClaimName))
+	}
+
 	var userInfo *OidcUserInfo
 	if userRequest.ClientRegistration.ProviderDetails.UserInfoURI != "" {
 		oauth2Req := &OAuth2UserRequest{
@@ -142,18 +152,13 @@ func (this *DefaultOidcUserService) LoadUser(userRequest *OidcUserRequest) (Oidc
 		oauth2User, err := this.oauth2UserService.LoadUser(oauth2Req)
 		if err == nil && oauth2User != nil {
 			attrs := oauth2User.GetAttributes()
-			var idTokenSub, userInfoSub string
-			if userRequest.IdToken != nil && userRequest.IdToken.Claims != nil {
-				if s, ok := userRequest.IdToken.Claims[subClaimName].(string); ok {
-					idTokenSub = s
-				}
-			}
+			var userInfoSub string
 			if attrs != nil {
 				if s, ok := attrs[subClaimName].(string); ok {
 					userInfoSub = s
 				}
 			}
-			if idTokenSub == "" || userInfoSub == "" || idTokenSub != userInfoSub {
+			if userInfoSub == "" || idTokenSub != userInfoSub {
 				return nil, NewError("InvalidUserInfoResponse", fmt.Sprintf("userInfo sub %q does not match idToken sub %q", userInfoSub, idTokenSub))
 			}
 			userInfo = &OidcUserInfo{Claims: attrs}

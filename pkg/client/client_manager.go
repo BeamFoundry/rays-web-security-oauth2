@@ -105,6 +105,7 @@ func (this *DefaultOAuth2AuthorizedClientManager) Authorize(request *OAuth2Autho
 			if authorizedClient != nil && this.authorizedClientRepo != nil {
 				if err := this.authorizedClientRepo.SaveAuthorizedClient(authorizedClient); err != nil {
 					err.LogError()
+					return nil, err
 				}
 			}
 			return authorizedClient, nil
@@ -155,13 +156,19 @@ func (this *RefreshTokenAuthorizedClientProvider) Authorize(request *OAuth2Autho
 	data := url.Values{}
 	data.Set("grant_type", string(GrantTypeRefreshToken))
 	data.Set("refresh_token", refreshToken.TokenValue)
+	if reg.ClientAuthenticationMethod == ClientAuthMethodPost {
+		data.Set("client_id", reg.ClientID)
+		data.Set("client_secret", reg.ClientSecret)
+	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, reg.ProviderDetails.TokenURI, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, NewErrorFrom(err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(reg.ClientID, reg.ClientSecret)
+	if reg.ClientAuthenticationMethod != ClientAuthMethodPost {
+		req.SetBasicAuth(reg.ClientID, reg.ClientSecret)
+	}
 
 	resp, reqErr := this.httpClient.Do(req)
 	if reqErr != nil {
@@ -252,13 +259,19 @@ func (this *ClientCredentialsAuthorizedClientProvider) Authorize(request *OAuth2
 	if len(reg.Scopes) > 0 {
 		data.Set("scope", strings.Join(reg.Scopes, " "))
 	}
+	if reg.ClientAuthenticationMethod == ClientAuthMethodPost {
+		data.Set("client_id", reg.ClientID)
+		data.Set("client_secret", reg.ClientSecret)
+	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, reg.ProviderDetails.TokenURI, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, NewErrorFrom(err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(reg.ClientID, reg.ClientSecret)
+	if reg.ClientAuthenticationMethod != ClientAuthMethodPost {
+		req.SetBasicAuth(reg.ClientID, reg.ClientSecret)
+	}
 
 	resp, reqErr := this.httpClient.Do(req)
 	if reqErr != nil {

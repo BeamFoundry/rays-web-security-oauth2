@@ -10,6 +10,7 @@ import (
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/client"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
+	. "github.com/BeamFoundry/rays/pkg/lang"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -164,6 +165,51 @@ var _ = Describe("Authorized Client Providers & Manager", func() {
 			Expect(refreshed.RefreshToken.TokenValue).To(Equal("updated-refresh-token"))
 			Expect(refreshed.AccessToken.Scopes).To(ConsistOf("read", "write"))
 		})
+
+		It("refreshes token using ClientAuthMethodPost", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodPost))
+				_, _, ok := r.BasicAuth()
+				Expect(ok).To(BeFalse())
+
+				err := r.ParseForm()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(r.Form.Get("grant_type")).To(Equal("refresh_token"))
+				Expect(r.Form.Get("refresh_token")).To(Equal("existing-rf-token"))
+				Expect(r.Form.Get("client_id")).To(Equal("post-client-id"))
+				Expect(r.Form.Get("client_secret")).To(Equal("post-secret"))
+
+				w.Header().Set("Content-Type", "application/json")
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "post-refreshed-token",
+					"token_type":   "Bearer",
+					"expires_in":   3600,
+				})).To(Succeed())
+			}))
+
+			reg := ClientRegistrationBuilder{}.New("test-post-rf").
+				ClientID("post-client-id").
+				ClientSecret("post-secret").
+				ClientAuthenticationMethod(ClientAuthMethodPost).
+				TokenURI(mockServer.URL).
+				Build()
+
+			now := time.Now()
+			expiredToken := OAuth2AccessToken{}.New(TokenTypeBearer, "old-token", now.Add(-2*time.Hour), now.Add(-1*time.Hour), []string{"read"})
+			refreshToken := OAuth2RefreshToken{}.New("existing-rf-token", now.Add(-2*time.Hour), time.Time{})
+			existingAuthorizedClient := OAuth2AuthorizedClient{}.New(reg, "bob", expiredToken, refreshToken)
+
+			provider := RefreshTokenAuthorizedClientProvider{}.New(mockServer.Client())
+			req := &OAuth2AuthorizeRequest{
+				ClientRegistration: reg,
+				PrincipalName:      "bob",
+				AuthorizedClient:   existingAuthorizedClient,
+			}
+
+			refreshed, err := provider.Authorize(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(refreshed.AccessToken.TokenValue).To(Equal("post-refreshed-token"))
+		})
 	})
 
 	Context("ClientCredentialsAuthorizedClientProvider", func() {
@@ -209,6 +255,46 @@ var _ = Describe("Authorized Client Providers & Manager", func() {
 			Expect(authorized).NotTo(BeNil())
 			Expect(authorized.AccessToken.TokenValue).To(Equal("m2m-access-token-12345"))
 			Expect(authorized.AccessToken.Scopes).To(ConsistOf("internal-metrics", "audit"))
+		})
+
+		It("obtains access token using ClientAuthMethodPost", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodPost))
+				_, _, ok := r.BasicAuth()
+				Expect(ok).To(BeFalse())
+
+				err := r.ParseForm()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(r.Form.Get("grant_type")).To(Equal("client_credentials"))
+				Expect(r.Form.Get("client_id")).To(Equal("post-cc-id"))
+				Expect(r.Form.Get("client_secret")).To(Equal("post-cc-secret"))
+
+				w.Header().Set("Content-Type", "application/json")
+				//nolint:gosec // mock token in test
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "post-cc-token",
+					"token_type":   "Bearer",
+					"expires_in":   7200,
+				})).To(Succeed())
+			}))
+
+			reg := ClientRegistrationBuilder{}.New("backend-post-cc").
+				ClientID("post-cc-id").
+				ClientSecret("post-cc-secret").
+				ClientAuthenticationMethod(ClientAuthMethodPost).
+				AuthorizationGrantType(GrantTypeClientCredentials).
+				TokenURI(mockServer.URL).
+				Build()
+
+			provider := ClientCredentialsAuthorizedClientProvider{}.New(mockServer.Client())
+			req := &OAuth2AuthorizeRequest{
+				ClientRegistration: reg,
+				PrincipalName:      "backend-post-cc",
+			}
+
+			authorized, err := provider.Authorize(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(authorized.AccessToken.TokenValue).To(Equal("post-cc-token"))
 		})
 	})
 
@@ -258,6 +344,46 @@ var _ = Describe("Authorized Client Providers & Manager", func() {
 			saved, err := clientService.LoadAuthorizedClient("auth0", "carol")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(saved.AccessToken.TokenValue).To(Equal("managed-refreshed-token"))
+		})
+
+		It("returns error when SaveAuthorizedClient fails in manager", func() {
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "token-to-save",
+					"token_type":   "Bearer",
+					"expires_in":   1800,
+				})).To(Succeed())
+			}))
+
+			reg := ClientRegistrationBuilder{}.New("auth0-fail").
+				ClientID("auth0-client").
+				ClientSecret("auth0-secret").
+				TokenURI(mockServer.URL).
+				Build()
+
+			regRepo := InMemoryClientRegistrationRepository{}.New(reg)
+			failingService := &testFailingAuthorizedClientService{}
+
+			now := time.Now()
+			expiredToken := OAuth2AccessToken{}.New(TokenTypeBearer, "old-tok", now.Add(-time.Hour), now.Add(-10*time.Minute), []string{"read"})
+			refreshToken := OAuth2RefreshToken{}.New("saved-refresh-tok", now.Add(-time.Hour), time.Time{})
+			existingClient := OAuth2AuthorizedClient{}.New(reg, "carol", expiredToken, refreshToken)
+
+			manager := DefaultOAuth2AuthorizedClientManager{}.New(
+				regRepo,
+				failingService,
+				RefreshTokenAuthorizedClientProvider{}.New(mockServer.Client()),
+			)
+
+			result, err := manager.Authorize(&OAuth2AuthorizeRequest{
+				ClientRegistration: reg,
+				PrincipalName:      "carol",
+				AuthorizedClient:   existingClient,
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("StorageSaveError"))
+			Expect(result).To(BeNil())
 		})
 
 		It("returns existing authorized client early if access token is still valid", func() {
@@ -548,4 +674,18 @@ type clientFailingRoundTripper struct{}
 
 func (this *clientFailingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
 	return nil, errors.New("simulated network connection failure")
+}
+
+type testFailingAuthorizedClientService struct{}
+
+func (this *testFailingAuthorizedClientService) SaveAuthorizedClient(_ *OAuth2AuthorizedClient) Error {
+	return NewError("StorageSaveError", "simulated save failure")
+}
+
+func (this *testFailingAuthorizedClientService) LoadAuthorizedClient(_, _ string) (*OAuth2AuthorizedClient, Error) {
+	return nil, NewError("AuthorizedClientNotFound", "client not found")
+}
+
+func (this *testFailingAuthorizedClientService) RemoveAuthorizedClient(_, _ string) Error {
+	return nil
 }

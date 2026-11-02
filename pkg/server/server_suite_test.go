@@ -128,6 +128,73 @@ var _ = Describe("OAuth2AuthorizationService", func() {
 		_, err = service.FindByID("auth-1")
 		Expect(err).To(HaveOccurred())
 	})
+
+	It("cleans up stale token indexes when tokens are rotated on save", func() {
+		service := InMemoryOAuth2AuthorizationService{}.New()
+
+		auth := &OAuth2Authorization{
+			ID:                 "auth-rot",
+			RegisteredClientID: "client-rot",
+			PrincipalName:      "alice",
+			AuthorizationCode: &AuthorizationCode{
+				Value: "code-v1",
+			},
+			AccessToken: &OAuth2AccessToken{
+				TokenValue: "at-v1",
+			},
+			RefreshToken: &OAuth2RefreshToken{
+				TokenValue: "rt-v1",
+			},
+		}
+
+		Expect(service.Save(auth)).NotTo(HaveOccurred())
+
+		// Rotate tokens
+		auth.AuthorizationCode = &AuthorizationCode{Value: "code-v2"}
+		auth.AccessToken = &OAuth2AccessToken{TokenValue: "at-v2"}
+		auth.RefreshToken = &OAuth2RefreshToken{TokenValue: "rt-v2"}
+
+		Expect(service.Save(auth)).NotTo(HaveOccurred())
+
+		// Old tokens must no longer be found
+		_, err := service.FindByToken("code-v1", "code")
+		Expect(err).To(HaveOccurred())
+		_, err = service.FindByToken("at-v1", "access_token")
+		Expect(err).To(HaveOccurred())
+		_, err = service.FindByToken("rt-v1", "refresh_token")
+		Expect(err).To(HaveOccurred())
+
+		// New tokens must be found
+		byCode, err := service.FindByToken("code-v2", "code")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(byCode.ID).To(Equal("auth-rot"))
+		byAccess, err := service.FindByToken("at-v2", "access_token")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(byAccess.ID).To(Equal("auth-rot"))
+		byRefresh, err := service.FindByToken("rt-v2", "refresh_token")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(byRefresh.ID).To(Equal("auth-rot"))
+
+		// Another auth with token must not be deleted when auth-rot is removed
+		otherAuth := &OAuth2Authorization{
+			ID:                 "auth-other",
+			RegisteredClientID: "client-rot",
+			PrincipalName:      "bob",
+			AccessToken:        &OAuth2AccessToken{TokenValue: "at-other"},
+		}
+		Expect(service.Save(otherAuth)).NotTo(HaveOccurred())
+
+		Expect(service.Remove(auth)).NotTo(HaveOccurred())
+
+		// auth-rot tokens gone
+		_, err = service.FindByToken("at-v2", "access_token")
+		Expect(err).To(HaveOccurred())
+
+		// otherAuth token preserved
+		byOther, err := service.FindByToken("at-other", "access_token")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(byOther.ID).To(Equal("auth-other"))
+	})
 })
 
 var _ = Describe("JwtOAuth2TokenGenerator", func() {
@@ -534,10 +601,11 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			}
 			Expect(authService.Save(auth)).NotTo(HaveOccurred())
 
-			// 1. Introspect active token
+			// 1. Introspect active token with valid client auth
 			introspectURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/introspect")
 			Expect(err).NotTo(HaveOccurred())
 			hActive := NewMockSecurityHandler(HttpMethods.POST, introspectURI)
+			hActive.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
 			hActive.SetFormValue("token", "introspect-at-val")
 
 			Expect(router.Execute(hActive)).To(Succeed())
@@ -549,18 +617,25 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 
 			// 2. Introspect unknown/inactive token
 			hInactive := NewMockSecurityHandler(HttpMethods.POST, introspectURI)
+			hInactive.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
 			hInactive.SetFormValue("token", "unknown-token")
 			Expect(router.Execute(hInactive)).To(Succeed())
 			var inactiveResp map[string]any
 			Expect(json.Unmarshal(hInactive.Res.Body.Bytes(), &inactiveResp)).To(Succeed())
 			Expect(inactiveResp).To(HaveKeyWithValue("active", false))
+
+			// 3. Introspect with invalid client credentials fails
+			hBadClient := NewMockSecurityHandler(HttpMethods.POST, introspectURI)
+			hBadClient.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:wrong-secret")))
+			hBadClient.SetFormValue("token", "introspect-at-val")
+			Expect(router.Execute(hBadClient)).To(HaveOccurred())
 		})
 
-		It("tests handleRevoke for access token and unknown token", func() {
+		It("tests handleRevoke for access token, client authorization check, and unknown token", func() {
 			revokeURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/revoke")
 			Expect(err).NotTo(HaveOccurred())
 
-			// 1. Revoke access token
+			// 1. Revoke access token with valid client credentials
 			now := time.Now()
 			at := NewOAuth2AccessToken(TokenTypeBearer, "revoke-at-val", now, now.Add(time.Hour), []string{"read"})
 			auth := &OAuth2Authorization{
@@ -572,15 +647,23 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			Expect(authService.Save(auth)).NotTo(HaveOccurred())
 
 			hRevoke := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevoke.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
 			hRevoke.SetFormValue("token", "revoke-at-val")
 			Expect(router.Execute(hRevoke)).To(Succeed())
 			Expect(hRevoke.Res.Body.String()).To(Equal("{}"))
 
 			// 2. Revoke unknown token (RFC 7009 returns 200 OK)
 			hRevokeUnknown := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeUnknown.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
 			hRevokeUnknown.SetFormValue("token", "not-found-token")
 			Expect(router.Execute(hRevokeUnknown)).To(Succeed())
 			Expect(hRevokeUnknown.Res.Body.String()).To(Equal("{}"))
+
+			// 3. Revoke with invalid client credentials fails
+			hRevokeBad := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeBad.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:wrong-secret")))
+			hRevokeBad.SetFormValue("token", "not-found-token")
+			Expect(router.Execute(hRevokeBad)).To(HaveOccurred())
 		})
 
 		It("tests handleAuthorize and handleToken validation error branches", func() {
@@ -826,6 +909,134 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			Expect(err).NotTo(HaveOccurred())
 			hFailingJWK := NewMockSecurityHandler(HttpMethods.GET, jwksURI)
 			Expect(routerFailingJWK.Execute(hFailingJWK)).To(HaveOccurred())
+
+			// 19. Public client rejected on client_credentials grant
+			publicClient := &RegisteredClient{
+				ID:                          "public-client-id",
+				ClientID:                    "public-app",
+				ClientName:                  "Public App",
+				ClientAuthenticationMethods: []ClientAuthenticationMethod{ClientAuthMethodNone},
+				AuthorizationGrantTypes:     []AuthorizationGrantType{GrantTypeAuthorizationCode, GrantTypeRefreshToken, GrantTypeClientCredentials},
+				RedirectURIs:                []string{"https://public.example.com/callback"},
+				Scopes:                      []string{"openid", "profile"},
+				RequireProofKey:             true,
+			}
+			Expect(clientRepo.Save(publicClient)).NotTo(HaveOccurred())
+
+			hPublicCC := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hPublicCC.SetFormValue("client_id", "public-app")
+			hPublicCC.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hPublicCC)).To(HaveOccurred())
+
+			// 20. Scope validation in handleAuthorize: unauthorized scope rejected
+			authUser := DefaultOAuth2User{}.New([]GrantedAuthority{Authority("ROLE_USER")}, map[string]any{"sub": "john"}, "sub")
+			contextHolder.GetContext().SetAuthentication(OAuth2AuthenticationToken{}.New(authUser, authUser.GetAuthorities(), "internal"))
+			authBadScopeURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/authorize?client_id=my-spa-app&response_type=code&scope=unauthorized-scope&redirect_uri=" + url.QueryEscape("https://my-spa.example.com/callback") + "&code_challenge=xyz&code_challenge_method=S256")
+			Expect(err).NotTo(HaveOccurred())
+			hBadScope := NewMockSecurityHandler(HttpMethods.GET, authBadScopeURI)
+			Expect(router.Execute(hBadScope)).To(HaveOccurred())
+
+			// 21. handleAuthorize missing redirect_uri with multiple registered redirect URIs rejected
+			multiRedirectClient := &RegisteredClient{
+				ID:                      "multi-uri-client",
+				ClientID:                "multi-uri-app",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeAuthorizationCode},
+				RedirectURIs:            []string{"https://app1.example.com/cb", "https://app2.example.com/cb"},
+				Scopes:                  []string{"read"},
+			}
+			Expect(clientRepo.Save(multiRedirectClient)).NotTo(HaveOccurred())
+			authMissingURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/authorize?client_id=multi-uri-app&response_type=code")
+			Expect(err).NotTo(HaveOccurred())
+			hMissingURI := NewMockSecurityHandler(HttpMethods.GET, authMissingURI)
+			Expect(router.Execute(hMissingURI)).To(HaveOccurred())
+
+			// 22. handleAuthorize client not registered for authorization_code grant rejected
+			noAuthCodeClient := &RegisteredClient{
+				ID:                      "no-auth-code-client",
+				ClientID:                "no-auth-code-app",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeClientCredentials},
+				RedirectURIs:            []string{"https://app.example.com/cb"},
+			}
+			Expect(clientRepo.Save(noAuthCodeClient)).NotTo(HaveOccurred())
+			authNoCodeGrantURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/authorize?client_id=no-auth-code-app&response_type=code&redirect_uri=" + url.QueryEscape("https://app.example.com/cb"))
+			Expect(err).NotTo(HaveOccurred())
+			hNoCodeGrant := NewMockSecurityHandler(HttpMethods.GET, authNoCodeGrantURI)
+			Expect(router.Execute(hNoCodeGrant)).To(HaveOccurred())
+
+			// 23. handleAuthorizationCodeGrant with wrong client ID rejected
+			diffClientAuth := &OAuth2Authorization{
+				ID:                 "diff-client-auth",
+				RegisteredClientID: "other-client-id",
+				PrincipalName:      "user-diff",
+				AuthorizationCode: &AuthorizationCode{
+					Value:       "diff-code",
+					IssuedAt:    time.Now(),
+					ExpiresAt:   time.Now().Add(5 * time.Minute),
+					RedirectURI: "https://my-spa.example.com/callback",
+				},
+			}
+			Expect(authService.Save(diffClientAuth)).NotTo(HaveOccurred())
+			hDiffClient := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hDiffClient.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hDiffClient.SetFormValue("grant_type", "authorization_code")
+			hDiffClient.SetFormValue("code", "diff-code")
+			hDiffClient.SetFormValue("redirect_uri", "https://my-spa.example.com/callback")
+			Expect(router.Execute(hDiffClient)).To(HaveOccurred())
+
+			// 24. handleRefreshTokenGrant with expired refresh token rejected
+			expiredRFAuth := &OAuth2Authorization{
+				ID:                 "expired-rf-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-rf-expired",
+				RefreshToken: &OAuth2RefreshToken{
+					TokenValue: "expired-rf-val", // #nosec G101
+					IssuedAt:   time.Now().Add(-2 * time.Hour),
+					ExpiresAt:  time.Now().Add(-1 * time.Hour),
+				},
+			}
+			Expect(authService.Save(expiredRFAuth)).NotTo(HaveOccurred())
+			hExpiredRF := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hExpiredRF.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hExpiredRF.SetFormValue("grant_type", "refresh_token")
+			hExpiredRF.SetFormValue("refresh_token", "expired-rf-val")
+			Expect(router.Execute(hExpiredRF)).To(HaveOccurred())
+
+			// 25. handleRefreshTokenGrant with wrong client ID rejected
+			diffClientRFAuth := &OAuth2Authorization{
+				ID:                 "diff-rf-auth",
+				RegisteredClientID: "other-client-id",
+				PrincipalName:      "user-diff-rf",
+				RefreshToken: &OAuth2RefreshToken{
+					TokenValue: "diff-client-rf-val", // #nosec G101
+					IssuedAt:   time.Now(),
+					ExpiresAt:  time.Now().Add(time.Hour),
+				},
+			}
+			Expect(authService.Save(diffClientRFAuth)).NotTo(HaveOccurred())
+			hDiffRF := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hDiffRF.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hDiffRF.SetFormValue("grant_type", "refresh_token")
+			hDiffRF.SetFormValue("refresh_token", "diff-client-rf-val")
+			Expect(router.Execute(hDiffRF)).To(HaveOccurred())
+
+			// 26. handleRevoke does not remove token owned by another client
+			foreignToken := NewOAuth2AccessToken(TokenTypeBearer, "foreign-at", time.Now(), time.Now().Add(time.Hour), []string{"read"})
+			foreignAuth := &OAuth2Authorization{
+				ID:                 "foreign-auth",
+				RegisteredClientID: "different-owner-id",
+				AccessToken:        foreignToken,
+			}
+			Expect(authService.Save(foreignAuth)).NotTo(HaveOccurred())
+			revokeURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/revoke")
+			Expect(err).NotTo(HaveOccurred())
+			hRevokeForeign := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeForeign.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeForeign.SetFormValue("token", "foreign-at")
+			Expect(router.Execute(hRevokeForeign)).To(Succeed())
+			// Must still exist in authorization service
+			stillThere, findErr := authService.FindByToken("foreign-at", "access_token")
+			Expect(findErr).NotTo(HaveOccurred())
+			Expect(stillThere.ID).To(Equal("foreign-auth"))
 		})
 	})
 })

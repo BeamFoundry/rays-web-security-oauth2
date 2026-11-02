@@ -27,6 +27,7 @@ type OAuth2LoginAuthenticationProvider struct {
 	httpClient              *http.Client
 	injectedUserService     Optional[OAuth2UserService] `@:"Inject"`
 	injectedOidcUserService Optional[OidcUserService]   `@:"Inject"`
+	injectedJwtDecoder      Optional[JwtDecoder]        `@:"Inject"`
 }
 
 var (
@@ -63,6 +64,11 @@ func NewOAuth2LoginAuthenticationProvider(
 	return OAuth2LoginAuthenticationProvider{}.New(client, userService, oidcUserService)
 }
 
+func (this *OAuth2LoginAuthenticationProvider) WithJwtDecoder(decoder JwtDecoder) *OAuth2LoginAuthenticationProvider {
+	this.jwtDecoder = decoder
+	return this
+}
+
 func (this *OAuth2LoginAuthenticationProvider) PostConstruct() Error {
 	if this.httpClient == nil {
 		this.httpClient = http.DefaultClient
@@ -76,6 +82,9 @@ func (this *OAuth2LoginAuthenticationProvider) PostConstruct() Error {
 		this.oidcUserService = oidc
 	} else if this.oidcUserService == nil {
 		this.oidcUserService = DefaultOidcUserService{}.New(this.userService)
+	}
+	if dec, ok := this.injectedJwtDecoder.Get(); ok {
+		this.jwtDecoder = dec
 	}
 	return nil
 }
@@ -162,24 +171,39 @@ func (this *OAuth2LoginAuthenticationProvider) Authenticate(auth Authentication)
 	if isOidc {
 		var idToken *OidcIdToken
 		if tokenResp.IdToken != "" {
-			var claims map[string]any
-			if this.jwtDecoder != nil {
-				if decoded, decodeErr := this.jwtDecoder.Decode(tokenResp.IdToken); decodeErr == nil {
-					claims = decoded.Claims
-				} else {
-					decodeErr.LogError()
+			decoder := this.jwtDecoder
+			if decoder == nil && reg.ProviderDetails.JwkSetURI != "" {
+				jwxDec := NewJwxJwtDecoderWithRemoteJWKS(reg.ProviderDetails.JwkSetURI)
+				if reg.ProviderDetails.IssuerURI != "" {
+					jwxDec = jwxDec.WithIssuer(reg.ProviderDetails.IssuerURI)
 				}
-			}
-			if claims == nil {
-				var parseErr Error
-				_, claims, parseErr = ParseUnverified(tokenResp.IdToken)
-				if parseErr != nil {
-					parseErr.LogError()
+				if reg.ClientID != "" {
+					jwxDec = jwxDec.WithAudience(reg.ClientID)
 				}
+				decoder = jwxDec
 			}
+
+			if decoder == nil {
+				oauthErr := OAuth2Error{
+					ErrorCode:        OAuth2ErrorServerError,
+					ErrorDescription: "missing jwt decoder or jwk_set_uri for id_token verification",
+				}
+				return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+			}
+
+			decoded, decodeErr := decoder.Decode(tokenResp.IdToken)
+			if decodeErr != nil {
+				decodeErr.LogError()
+				oauthErr := OAuth2Error{
+					ErrorCode:        OAuth2ErrorInvalidGrant,
+					ErrorDescription: fmt.Sprintf("invalid id_token: %v", decodeErr),
+				}
+				return nil, OAuth2AuthenticationException{}.New(oauthErr, loginToken)
+			}
+
 			idToken = &OidcIdToken{
 				TokenValue: tokenResp.IdToken,
-				Claims:     claims,
+				Claims:     decoded.Claims,
 			}
 		}
 

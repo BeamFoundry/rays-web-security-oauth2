@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
@@ -43,7 +43,6 @@ type OAuth2AuthorizationServerFilter struct {
 	authorizationService   OAuth2AuthorizationService
 	config                 *OAuth2AuthorizationServerConfig
 	settings               *AuthorizationServerSettings
-	codeMu                 *sync.Mutex
 	injectedClientRepo     Optional[RegisteredClientRepository]   `@:"Inject"`
 	injectedContextHolder  Optional[SecurityContextHolder]        `@:"Inject"`
 	injectedJWKSource      Optional[JWKSource]                    `@:"Inject"`
@@ -73,7 +72,6 @@ func (this OAuth2AuthorizationServerFilter) New(
 	this.tokenGenerator = tokenGen
 	this.jwkSource = jwkSource
 	this.securityContextHolder = contextHolder
-	this.codeMu = &sync.Mutex{}
 	return &this
 }
 
@@ -216,6 +214,19 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		return handler.Error(http.StatusBadRequest, "Unknown client_id: "+clientID)
 	}
 
+	if !slices.Contains(client.AuthorizationGrantTypes, GrantTypeAuthorizationCode) {
+		return handler.Error(http.StatusBadRequest, "Client is not authorized for authorization_code grant")
+	}
+
+	if redirectURI == "" {
+		if len(client.RedirectURIs) != 1 {
+			return handler.Error(http.StatusBadRequest, "Missing redirect_uri and client does not have exactly one registered redirect URI")
+		}
+		redirectURI = client.RedirectURIs[0]
+	} else if !slices.Contains(client.RedirectURIs, redirectURI) {
+		return handler.Error(http.StatusBadRequest, "Invalid redirect_uri: "+redirectURI)
+	}
+
 	if responseType != OAuth2ParameterCode {
 		return handler.Error(http.StatusBadRequest, "Unsupported response_type: "+responseType)
 	}
@@ -233,6 +244,24 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		// User must log in first
 		handler.SetSessionValue("redirect", handler.Path()+"?"+handler.URL().RawQuery)
 		return handler.Redirect("/login", http.StatusFound)
+	}
+
+	// Validate requested scopes against registered scopes
+	var scopes []string
+	if scope != "" {
+		requestedScopes := strings.Split(scope, " ")
+		for _, s := range requestedScopes {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if !slices.Contains(client.Scopes, s) {
+				return handler.Error(http.StatusBadRequest, "Unauthorized or unconfigured scope: "+s)
+			}
+			scopes = append(scopes, s)
+		}
+	} else {
+		scopes = client.Scopes
 	}
 
 	// Generate authorization code
@@ -254,11 +283,6 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		Invalidated:         false,
 	}
 
-	var scopes []string
-	if scope != "" {
-		scopes = strings.Split(scope, " ")
-	}
-
 	authorization := &OAuth2Authorization{
 		ID:                 fmt.Sprintf("auth-%d", now.UnixNano()),
 		RegisteredClientID: client.ID,
@@ -272,16 +296,33 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 		return handler.Error(http.StatusInternalServerError, "Failed to save authorization")
 	}
 
-	target := fmt.Sprintf("%s?code=%s&state=%s", redirectURI, url.QueryEscape(code), url.QueryEscape(state))
-	return handler.Redirect(target, http.StatusFound)
+	targetURL, parseErr := url.Parse(redirectURI)
+	if parseErr != nil {
+		NewErrorFrom(parseErr).LogError()
+		return handler.Error(http.StatusBadRequest, "Malformed redirect_uri: "+redirectURI)
+	}
+	tQuery := targetURL.Query()
+	tQuery.Set("code", code)
+	if state != "" {
+		tQuery.Set("state", state)
+	}
+	targetURL.RawQuery = tQuery.Encode()
+	return handler.Redirect(targetURL.String(), http.StatusFound)
 }
 
-func (this *OAuth2AuthorizationServerFilter) handleToken(handler SecurityHandler) error {
-	grantType := handler.FormValue("grant_type")
+func isPublicClient(client *RegisteredClient) bool {
+	if len(client.ClientAuthenticationMethods) > 0 {
+		return slices.Contains(client.ClientAuthenticationMethods, ClientAuthMethodNone) &&
+			!slices.Contains(client.ClientAuthenticationMethods, ClientAuthMethodBasic) &&
+			!slices.Contains(client.ClientAuthenticationMethods, ClientAuthMethodPost)
+	}
+	return client.ClientSecret == ""
+}
+
+func (this *OAuth2AuthorizationServerFilter) authenticateClient(handler SecurityHandler) (*RegisteredClient, Error) {
 	clientID := handler.FormValue("client_id")
 	clientSecret := handler.FormValue("client_secret")
 
-	// Check Basic Auth header if form values absent
 	authHeader := handler.Header("Authorization")
 	if authHeader != "" && strings.HasPrefix(strings.ToLower(authHeader), "basic ") {
 		payload, err := base64.StdEncoding.DecodeString(authHeader[6:])
@@ -296,15 +337,37 @@ func (this *OAuth2AuthorizationServerFilter) handleToken(handler SecurityHandler
 		}
 	}
 
+	if clientID == "" {
+		return nil, NewError("InvalidClientError", "Client ID is required")
+	}
+
 	client, err := this.clientRepo.FindByClientID(clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !isPublicClient(client) {
+		if subtle.ConstantTimeCompare([]byte(client.ClientSecret), []byte(clientSecret)) != 1 {
+			return nil, NewError("InvalidClientError", "Client authentication failed")
+		}
+	}
+
+	return client, nil
+}
+
+func (this *OAuth2AuthorizationServerFilter) handleToken(handler SecurityHandler) error {
+	grantType := handler.FormValue("grant_type")
+
+	client, err := this.authenticateClient(handler)
 	if err != nil {
 		err.LogError()
 		return this.sendTokenError(handler, OAuth2ErrorInvalidClient, "Invalid client credentials")
 	}
 
-	// Authenticate client secret unless PKCE public client
-	if !client.RequireProofKey && client.ClientSecret != "" && client.ClientSecret != clientSecret {
-		return this.sendTokenError(handler, OAuth2ErrorInvalidClient, "Client authentication failed")
+	if isPublicClient(client) {
+		if grantType != string(GrantTypeAuthorizationCode) && grantType != string(GrantTypeRefreshToken) {
+			return this.sendTokenError(handler, OAuth2ErrorUnauthorizedClient, "Public clients may only use authorization_code and refresh_token grants")
+		}
 	}
 
 	switch AuthorizationGrantType(grantType) {
@@ -320,25 +383,20 @@ func (this *OAuth2AuthorizationServerFilter) handleToken(handler SecurityHandler
 }
 
 func (this *OAuth2AuthorizationServerFilter) handleAuthorizationCodeGrant(handler SecurityHandler, client *RegisteredClient) error {
-	if this.codeMu != nil {
-		this.codeMu.Lock()
-		defer this.codeMu.Unlock()
-	}
-
 	code := handler.FormValue(OAuth2ParameterCode)
 	redirectURI := handler.FormValue("redirect_uri")
 	codeVerifier := handler.FormValue("code_verifier")
 
-	auth, err := this.authorizationService.FindByToken(code, OAuth2ParameterCode)
+	auth, err := this.authorizationService.InvalidateAuthorizationCode(code)
 	if err != nil || auth == nil || auth.AuthorizationCode == nil {
 		if err != nil {
 			err.LogError()
 		}
-		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Invalid or expired authorization code")
+		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Authorization code has expired or was already used")
 	}
 
-	if auth.AuthorizationCode.Invalidated || time.Now().After(auth.AuthorizationCode.ExpiresAt) {
-		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Authorization code has expired or was already used")
+	if auth.RegisteredClientID != client.ID && auth.RegisteredClientID != client.ClientID {
+		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Client ID does not match authorization code")
 	}
 
 	if auth.AuthorizationCode.RedirectURI != "" && auth.AuthorizationCode.RedirectURI != redirectURI {
@@ -353,9 +411,6 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorizationCodeGrant(handle
 			return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "PKCE code_verifier validation failed")
 		}
 	}
-
-	// Invalidate code
-	auth.AuthorizationCode.Invalidated = true
 
 	accessToken, refreshToken, err := this.tokenGenerator.Generate(auth, client)
 	if err != nil {
@@ -401,6 +456,10 @@ func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handle
 }
 
 func (this *OAuth2AuthorizationServerFilter) handleRefreshTokenGrant(handler SecurityHandler, client *RegisteredClient) error {
+	if !slices.Contains(client.AuthorizationGrantTypes, GrantTypeRefreshToken) {
+		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Client not registered for refresh_token grant")
+	}
+
 	refreshTokenVal := handler.FormValue("refresh_token")
 	auth, err := this.authorizationService.FindByToken(refreshTokenVal, "refresh_token")
 	if err != nil || auth == nil || auth.RefreshToken == nil {
@@ -408,6 +467,14 @@ func (this *OAuth2AuthorizationServerFilter) handleRefreshTokenGrant(handler Sec
 			err.LogError()
 		}
 		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Invalid refresh_token")
+	}
+
+	if auth.RegisteredClientID != client.ID && auth.RegisteredClientID != client.ClientID {
+		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Client ID does not match refresh token")
+	}
+
+	if !auth.RefreshToken.ExpiresAt.IsZero() && time.Now().After(auth.RefreshToken.ExpiresAt) {
+		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Refresh token has expired")
 	}
 
 	accessToken, newRefreshToken, err := this.tokenGenerator.Generate(auth, client)
@@ -473,6 +540,12 @@ func (this *OAuth2AuthorizationServerFilter) handleDiscovery(handler SecurityHan
 }
 
 func (this *OAuth2AuthorizationServerFilter) handleIntrospect(handler SecurityHandler) error {
+	_, err := this.authenticateClient(handler)
+	if err != nil {
+		err.LogError()
+		return this.sendTokenError(handler, OAuth2ErrorInvalidClient, "Client authentication failed")
+	}
+
 	token := handler.FormValue("token")
 	auth, err := this.authorizationService.FindByToken(token, "access_token")
 	if err != nil {
@@ -484,8 +557,8 @@ func (this *OAuth2AuthorizationServerFilter) handleIntrospect(handler SecurityHa
 		resp["active"] = true
 		resp["sub"] = auth.PrincipalName
 		clientID := auth.RegisteredClientID
-		if client, clientErr := this.clientRepo.FindByID(auth.RegisteredClientID); clientErr == nil {
-			clientID = client.ClientID
+		if registered, clientErr := this.clientRepo.FindByID(auth.RegisteredClientID); clientErr == nil {
+			clientID = registered.ClientID
 		} else {
 			clientErr.LogError()
 		}
@@ -507,19 +580,28 @@ func (this *OAuth2AuthorizationServerFilter) handleIntrospect(handler SecurityHa
 }
 
 func (this *OAuth2AuthorizationServerFilter) handleRevoke(handler SecurityHandler) error {
-	token := handler.FormValue("token")
-	if auth, err := this.authorizationService.FindByToken(token, "access_token"); err == nil {
-		if rmErr := this.authorizationService.Remove(auth); rmErr != nil {
-			rmErr.LogError()
-		}
-	} else {
+	client, err := this.authenticateClient(handler)
+	if err != nil {
 		err.LogError()
-		if auth, err := this.authorizationService.FindByToken(token, "refresh_token"); err == nil {
-			if rmErr := this.authorizationService.Remove(auth); rmErr != nil {
-				rmErr.LogError()
+		return this.sendTokenError(handler, OAuth2ErrorInvalidClient, "Client authentication failed")
+	}
+
+	token := handler.FormValue("token")
+	if token != "" {
+		if auth, err := this.authorizationService.FindByToken(token, "access_token"); err == nil && auth != nil {
+			if auth.RegisteredClientID == client.ID || auth.RegisteredClientID == client.ClientID {
+				if rmErr := this.authorizationService.Remove(auth); rmErr != nil {
+					rmErr.LogError()
+				}
 			}
 		} else {
-			err.LogError()
+			if auth, err := this.authorizationService.FindByToken(token, "refresh_token"); err == nil && auth != nil {
+				if auth.RegisteredClientID == client.ID || auth.RegisteredClientID == client.ClientID {
+					if rmErr := this.authorizationService.Remove(auth); rmErr != nil {
+						rmErr.LogError()
+					}
+				}
+			}
 		}
 	}
 	handler.SetHeader("Content-Type", "application/json")

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net/http"
 	"time"
 
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
@@ -17,6 +19,9 @@ import (
 type JwxJwtDecoder struct {
 	keySet    jwk.Set
 	jwksURI   string
+	cache     *jwk.Cache
+	cachedSet jwk.CachedSet
+	initErr   error
 	issuer    string
 	audience  string
 	clockSkew time.Duration
@@ -33,6 +38,26 @@ func (this JwxJwtDecoder) NewWithKeySet(set jwk.Set) *JwxJwtDecoder {
 func (this JwxJwtDecoder) NewWithRemoteJWKS(jwksURI string) *JwxJwtDecoder {
 	this.jwksURI = jwksURI
 	this.clockSkew = 60 * time.Second
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	rcClient := httprc.NewClient(httprc.WithHTTPClient(httpClient))
+	ctx := context.Background()
+	cache, err := jwk.NewCache(ctx, rcClient)
+	if err != nil {
+		this.initErr = err
+		return &this
+	}
+	this.cache = cache
+	if regErr := cache.Register(ctx, jwksURI, jwk.WithWaitReady(false)); regErr != nil {
+		this.initErr = regErr
+		return &this
+	}
+	cs, csErr := cache.CachedSet(jwksURI)
+	if csErr != nil {
+		this.initErr = csErr
+		return &this
+	}
+	this.cachedSet = cs
 	return &this
 }
 
@@ -67,11 +92,25 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 	parseOptions = append(parseOptions, jwt.WithValidate(false))
 
 	if this.jwksURI != "" {
-		set, err := jwk.Fetch(ctx, this.jwksURI)
+		if this.initErr != nil {
+			return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to initialize remote jwks cache: %s", this.initErr))
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if !this.cache.Ready(lookupCtx, this.jwksURI) {
+			if _, err := this.cache.Refresh(lookupCtx, this.jwksURI); err != nil {
+				return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", err))
+			}
+		}
+		set, err := this.cache.Lookup(lookupCtx, this.jwksURI)
 		if err != nil {
 			return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", err))
 		}
-		parseOptions = append(parseOptions, jwt.WithKeySet(set))
+		if this.cachedSet != nil {
+			parseOptions = append(parseOptions, jwt.WithKeySet(this.cachedSet))
+		} else {
+			parseOptions = append(parseOptions, jwt.WithKeySet(set))
+		}
 	} else if this.keySet != nil {
 		parseOptions = append(parseOptions, jwt.WithKeySet(this.keySet))
 	}

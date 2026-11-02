@@ -237,6 +237,28 @@ var _ = Describe("Authorized Client Providers & Manager", func() {
 			Expect(saved.AccessToken.TokenValue).To(Equal("managed-refreshed-token"))
 		})
 
+		It("returns existing authorized client early if access token is still valid", func() {
+			reg := ClientRegistrationBuilder{}.New("auth-code-client").
+				ClientID("client-id").
+				AuthorizationGrantType(GrantTypeAuthorizationCode).
+				Build()
+
+			now := time.Now()
+			validToken := OAuth2AccessToken{}.New(TokenTypeBearer, "valid-cached-token", now, now.Add(30*time.Minute), []string{"read"})
+			existingClient := OAuth2AuthorizedClient{}.New(reg, "alice", validToken, nil)
+
+			manager := DefaultOAuth2AuthorizedClientManager{}.New(nil, nil)
+
+			result, err := manager.Authorize(&OAuth2AuthorizeRequest{
+				ClientRegistration: reg,
+				PrincipalName:      "alice",
+				AuthorizedClient:   existingClient,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(existingClient))
+			Expect(result.AccessToken.TokenValue).To(Equal("valid-cached-token"))
+		})
+
 		It("tests constructors, unsupported requests and error responses from token endpoints", func() {
 			reg := ClientRegistrationBuilder{}.New("test-client").
 				ClientID("cid").

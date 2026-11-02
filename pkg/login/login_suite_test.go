@@ -12,6 +12,7 @@ import (
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/client"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/login"
 	. "github.com/BeamFoundry/rays-web-security/pkg/config"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
@@ -38,6 +39,18 @@ func (this *mockAuthManager) Authenticate(auth Authentication) (Authentication, 
 		return this.authenticateFunc(auth)
 	}
 	return auth, nil
+}
+
+type mockTestJwtDecoder struct {
+	jwt *Jwt
+	err Error
+}
+
+func (this *mockTestJwtDecoder) Decode(_ string) (*Jwt, Error) {
+	if this.err != nil {
+		return nil, this.err
+	}
+	return this.jwt, nil
 }
 
 type mockSecurityContext struct {
@@ -527,7 +540,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			Expect(authEx).To(HaveOccurred())
 		})
 
-		It("authenticates full OIDC flow with id_token and UserInfo", func() {
+		It("authenticates full OIDC flow with id_token and UserInfo, and rejects invalid id_token", func() {
 			headerB64 := "eyJhbGciOiJub25lIn0"
 			claimsB64 := "eyJzdWIiOiJhbGljZS1vaWRjIiwiZW1haWwiOiJhbGljZUBvaWRjLmNvbSIsImlzcyI6Imh0dHBzOi8vb2lkYy5leGFtcGxlLmNvbSJ9"
 			rawIdToken := headerB64 + "." + claimsB64 + "."
@@ -575,7 +588,28 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			}
 
 			loginToken := OAuth2LoginAuthenticationToken{}.New(regOidc, exchange)
-			provider := NewOAuth2LoginAuthenticationProvider(oidcServer.Client(), nil, nil)
+
+			// 1. Unverified token fails when no decoder or jwks is provided
+			providerNoDecoder := NewOAuth2LoginAuthenticationProvider(oidcServer.Client(), nil, nil)
+			_, noDecEx := providerNoDecoder.Authenticate(loginToken)
+			Expect(noDecEx).To(HaveOccurred())
+
+			// 2. Decoder error returns authentication error
+			failDecoder := &mockTestJwtDecoder{err: NewError("JwtValidationError", "bad signature")}
+			providerBadDecoder := NewOAuth2LoginAuthenticationProvider(oidcServer.Client(), nil, nil).WithJwtDecoder(failDecoder)
+			_, badDecEx := providerBadDecoder.Authenticate(loginToken)
+			Expect(badDecEx).To(HaveOccurred())
+
+			// 3. Valid decoder succeeds
+			validJwt := NewJwt(
+				rawIdToken,
+				time.Now(),
+				time.Now().Add(time.Hour),
+				map[string]any{"alg": "none"},
+				map[string]any{"sub": "alice-oidc", "email": "alice@oidc.com", "iss": "https://oidc.example.com"},
+			)
+			decoder := &mockTestJwtDecoder{jwt: validJwt}
+			provider := NewOAuth2LoginAuthenticationProvider(oidcServer.Client(), nil, nil).WithJwtDecoder(decoder)
 
 			authResult, authEx := provider.Authenticate(loginToken)
 			Expect(authEx).NotTo(HaveOccurred())
@@ -594,7 +628,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 		It("tests DefaultOAuth2UserService with no UserInfoURI, error response and attribute fallback", func() {
 			svc := NewDefaultOAuth2UserService(nil)
 
-			// No UserInfoURI
+			// No UserInfoURI returns error
 			regNoUI := ClientRegistrationBuilder{}.New("no-ui").
 				ClientID("client-no-ui").
 				Build()
@@ -602,9 +636,8 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 				ClientRegistration: regNoUI,
 				AccessToken:        OAuth2AccessToken{}.New(TokenTypeBearer, "tok", time.Now(), time.Now().Add(time.Hour), []string{"read"}),
 			}
-			user, err := svc.LoadUser(reqNoUI)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(user.GetName()).To(Equal("client-no-ui"))
+			_, err := svc.LoadUser(reqNoUI)
+			Expect(err).To(HaveOccurred())
 
 			// Error response from UserInfo endpoint
 			errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -760,6 +793,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			redirectEx := &DefaultSecurityFilterChainException{}
 			Expect(errors.As(err, &redirectEx)).To(BeTrue())
 			Expect(redirectEx.Action()).To(Equal(DefaultSecurityFilterAction{}.New().REDIRECT.Name()))
+			Expect(redirectEx.To()).To(ContainSubstring("redirect_uri=" + url.QueryEscape("https://app.example.com/login/oauth2/code/init-reg")))
 
 			// 2. Unknown registration ID returns 404 error
 			initBadURL, err := url.Parse("https://app.example.com/oauth2/authorization/unknown-reg")
@@ -780,10 +814,16 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 		It("tests ClientAuthMethodPost, transport failure, and malformed UserInfo JSON", func() {
 			// 1. ClientAuthMethodPost
 			postServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/userinfo" {
+					Expect(json.NewEncoder(w).Encode(map[string]any{
+						"sub": "post-user",
+					})).To(Succeed())
+					return
+				}
 				Expect(r.ParseForm()).To(Succeed())
 				Expect(r.Form.Get("client_id")).To(Equal("post-client-id"))
 				Expect(r.Form.Get("client_secret")).To(Equal("post-client-sec"))
-				w.Header().Set("Content-Type", "application/json")
 				Expect(json.NewEncoder(w).Encode(map[string]any{
 					"access_token": "post-at-123",
 					"token_type":   "Bearer",
@@ -797,6 +837,7 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 				ClientSecret("post-client-sec").
 				ClientAuthenticationMethod(ClientAuthMethodPost).
 				TokenURI(postServer.URL).
+				UserInfoURI(postServer.URL + "/userinfo").
 				Build()
 
 			postExchange := OAuth2AuthorizationExchange{

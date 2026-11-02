@@ -51,6 +51,11 @@ func (this *JwtAuthenticationProvider) WithConverter(c JwtAuthenticationConverte
 	return this
 }
 
+func (this *JwtAuthenticationProvider) WithDecoder(decoder JwtDecoder) *JwtAuthenticationProvider {
+	this.jwtDecoder = decoder
+	return this
+}
+
 func (this *JwtAuthenticationProvider) Supports(auth Authentication) bool {
 	_, ok := auth.(*BearerTokenAuthenticationToken)
 	return ok

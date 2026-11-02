@@ -292,8 +292,10 @@ formatters:
         - dot
       custom-order: true
     gofumpt:
-      module-path: github.com/gofiber/fiber
-      extra-rules: true
+      module-path: github.com/BeamFoundry/rays-web-security-oauth2
+      extra:
+        group-params: true
+        clothe-returns: false
   exclusions:
     generated: lax
     paths:

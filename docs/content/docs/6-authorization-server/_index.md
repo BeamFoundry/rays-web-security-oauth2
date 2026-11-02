@@ -4,10 +4,10 @@ weight: 6
 bookCollapseSection: false
 ---
 
-# OAuth 2.1 / OIDC 1.0 Authorization Server
-
-**Rays OAuth2 Authorization Server** is a full-featured, standards-compliant OAuth 2.1 and OpenID Connect 1.0 server implementation modeled after the **Spring Authorization Server** project.
-
+# OAuth 2.1 Authorization Server
+ 
+**Rays OAuth2 Authorization Server** is a full-featured, standards-compliant OAuth 2.0 / OAuth 2.1 authorization server implementation modeled after the **Spring Authorization Server** project. Note that while discovery metadata (`/.well-known/openid-configuration`) is supported for OAuth metadata discovery, the current token response path does not emit OIDC ID tokens; this module currently functions as an OAuth authorization server without OpenID Connect provider support.
+ 
 It provides out-of-the-box endpoints for authorization code generation (with mandatory or optional PKCE), client authentication, token issuance, public key sets (JWKS), token introspection, and token revocation.
 
 ---

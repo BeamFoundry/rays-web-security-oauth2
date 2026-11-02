@@ -18,8 +18,6 @@ type OAuth2LoginConfigurer struct {
 	authRequestRepo        AuthorizationRequestRepository
 	authManager            AuthenticationManager
 	contextHolder          SecurityContextHolder
-	userService            OAuth2UserService
-	oidcUserService        OidcUserService
 	builder                *HttpSecurityBuilder
 	defaultSuccessURL      string
 	defaultRegistrationID  string
@@ -74,16 +72,6 @@ func (this *OAuth2LoginConfigurer) LoginProcessingURL(url string) *OAuth2LoginCo
 
 func (this *OAuth2LoginConfigurer) AuthorizationBaseURI(uri string) *OAuth2LoginConfigurer {
 	this.authorizationBaseURI = uri
-	return this
-}
-
-func (this *OAuth2LoginConfigurer) UserService(svc OAuth2UserService) *OAuth2LoginConfigurer {
-	this.userService = svc
-	return this
-}
-
-func (this *OAuth2LoginConfigurer) OidcUserService(svc OidcUserService) *OAuth2LoginConfigurer {
-	this.oidcUserService = svc
 	return this
 }
 
@@ -152,6 +140,7 @@ func (this *OAuth2ResourceServerConfigurer) And() *HttpSecurityBuilder {
 		TokenResolver:         this.tokenResolver,
 		AuthenticationManager: this.authManager,
 		SecurityContextHolder: this.contextHolder,
+		JwtDecoder:            this.jwtDecoder,
 		RealmName:             this.realmName,
 	}
 	this.builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
@@ -209,15 +198,6 @@ func (this *OAuth2AuthorizationServerConfigurer) SecurityContextHolder(holder Se
 }
 
 func (this *OAuth2AuthorizationServerConfigurer) And() *HttpSecurityBuilder {
-	if this.tokenGenerator == nil && this.jwkSource != nil {
-		issuer := "http://localhost:8080"
-		if this.settings != nil {
-			issuer = this.settings.Issuer
-		}
-		encoder := DefaultJwtEncoder{}.New(this.jwkSource)
-		this.tokenGenerator = JwtOAuth2TokenGenerator{}.New(encoder, issuer)
-	}
-
 	cfg := &OAuth2AuthorizationServerConfig{
 		Settings:              this.settings,
 		ClientRepository:      this.clientRepo,

@@ -2,8 +2,11 @@ package resourceserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
+	. "github.com/BeamFoundry/rays-web-security/pkg/auth"
 	. "github.com/BeamFoundry/rays-web-security/pkg/config"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/core"
@@ -15,7 +18,31 @@ type BearerTokenConfig struct {
 	TokenResolver         BearerTokenResolver
 	AuthenticationManager AuthenticationManager
 	SecurityContextHolder SecurityContextHolder
+	JwtDecoder            JwtDecoder
 	RealmName             string
+}
+
+type jwtAuthenticationManager struct {
+	Manager
+	provider *JwtAuthenticationProvider
+	fallback AuthenticationManager
+}
+
+func (this *jwtAuthenticationManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
+	if this.fallback != nil {
+		res, authEx := this.fallback.Authenticate(auth)
+		if authEx == nil {
+			return res, nil
+		}
+		var pnf *ProviderNotFoundException
+		if !errors.As(authEx, &pnf) && authEx.Name() != "ProviderNotFoundException" {
+			return res, authEx
+		}
+	}
+	if this.provider != nil && this.provider.Supports(auth) {
+		return this.provider.Authenticate(auth)
+	}
+	return auth, ProviderNotFoundException{}.New("No AuthenticationProvider found for authentication", auth)
 }
 
 // BearerTokenAuthenticationFilter authenticates incoming requests containing a Bearer token
@@ -25,10 +52,14 @@ type BearerTokenAuthenticationFilter struct {
 	tokenResolver         BearerTokenResolver
 	authenticationManager AuthenticationManager
 	securityContextHolder SecurityContextHolder
+	jwtDecoder            JwtDecoder
 	config                *BearerTokenConfig
-	injectedTokenResolver Optional[BearerTokenResolver]   `@:"Inject"`
-	injectedAuthManager   Optional[AuthenticationManager] `@:"Inject"`
-	injectedContextHolder Optional[SecurityContextHolder] `@:"Inject"`
+	injectedTokenResolver Optional[BearerTokenResolver]        `@:"Inject"`
+	injectedAuthManager   Optional[AuthenticationManager]      `@:"Inject"`
+	injectedContextHolder Optional[SecurityContextHolder]      `@:"Inject"`
+	injectedJwtDecoder    Optional[JwtDecoder]                 `@:"Inject"`
+	injectedJwtProvider   Optional[*JwtAuthenticationProvider] `@:"Inject"`
+	injectedConverter     Optional[JwtAuthenticationConverter] `@:"Inject"`
 	realmName             string
 }
 
@@ -66,12 +97,18 @@ func (this *BearerTokenAuthenticationFilter) WithRealmName(realm string) *Bearer
 	return this
 }
 
+func (this *BearerTokenAuthenticationFilter) WithJwtDecoder(decoder JwtDecoder) *BearerTokenAuthenticationFilter {
+	this.jwtDecoder = decoder
+	return this
+}
+
 func (this *BearerTokenAuthenticationFilter) Config() *BearerTokenConfig {
 	if this.config == nil {
 		this.config = &BearerTokenConfig{
 			TokenResolver:         this.tokenResolver,
 			AuthenticationManager: this.authenticationManager,
 			SecurityContextHolder: this.securityContextHolder,
+			JwtDecoder:            this.jwtDecoder,
 			RealmName:             this.realmName,
 		}
 	}
@@ -88,6 +125,9 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 	}
 	if holder, ok := this.injectedContextHolder.Get(); ok {
 		this.securityContextHolder = holder
+	}
+	if dec, ok := this.injectedJwtDecoder.Get(); ok {
+		this.jwtDecoder = dec
 	}
 
 	if ct := ctx.Value(PrototypeContextParentInstance); ct != nil {
@@ -113,6 +153,9 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 		if cfg.SecurityContextHolder != nil {
 			this.securityContextHolder = cfg.SecurityContextHolder
 		}
+		if cfg.JwtDecoder != nil {
+			this.jwtDecoder = cfg.JwtDecoder
+		}
 		if cfg.RealmName != "" {
 			this.realmName = cfg.RealmName
 		}
@@ -122,6 +165,22 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 	}
 	if this.realmName == "" {
 		this.realmName = "rays-web-security-oauth2"
+	}
+	if jwtProv, ok := this.injectedJwtProvider.Get(); ok {
+		if this.jwtDecoder != nil {
+			jwtProv.WithDecoder(this.jwtDecoder)
+		}
+	}
+	if this.jwtDecoder != nil {
+		jwtProvider := JwtAuthenticationProvider{}.New(this.jwtDecoder)
+		if conv, ok := this.injectedConverter.Get(); ok {
+			jwtProvider.WithConverter(conv)
+		}
+		if this.authenticationManager == nil {
+			this.authenticationManager = &jwtAuthenticationManager{provider: jwtProvider}
+		} else {
+			this.authenticationManager = &jwtAuthenticationManager{provider: jwtProvider, fallback: this.authenticationManager}
+		}
 	}
 	return nil
 }

@@ -8,7 +8,7 @@ bookCollapseSection: false
 
 An **OAuth2 Resource Server** protects HTTP endpoints by validating incoming OAuth 2.0 Bearer tokens (RFC 6750) included in request headers.
 
-Modeled after Spring Security's `oauth2ResourceServer()`, `rays-web-security-oauth2` extracts the Bearer token, validates it via either **stateless JWT verification** or **opaque token introspection (RFC 7662)**, maps claims to `GrantedAuthority` slices, and populates the `SecurityContextHolder`.
+Modeled after Spring Security's `oauth2ResourceServer()`, `rays-web-security-oauth2` extracts the Bearer token, validates it via **stateless JWT verification**, maps claims to `GrantedAuthority` slices, and populates the `SecurityContextHolder`.
 
 ---
 
@@ -23,7 +23,7 @@ Modeled after Spring Security's `oauth2ResourceServer()`, `rays-web-security-oau
 
 3. Creates unauthenticated BearerTokenAuthenticationToken.
 
-4. AuthenticationManager delegates to JwtAuthenticationProvider (or OpaqueTokenAuthenticationProvider).
+4. AuthenticationManager delegates to JwtAuthenticationProvider.
 
 5. JwtDecoder verifies signature using JWK Set (public keys) and checks:
    - exp (expiration with configurable clock skew)

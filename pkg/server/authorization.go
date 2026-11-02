@@ -39,6 +39,13 @@ type OAuth2AuthorizationService interface {
 	Remove(authorization *OAuth2Authorization) Error
 	FindByID(id string) (*OAuth2Authorization, Error)
 	FindByToken(token, tokenType string) (*OAuth2Authorization, Error)
+	InvalidateAuthorizationCode(code string) (*OAuth2Authorization, Error)
+}
+
+type trackedTokens struct {
+	code         string
+	accessToken  string
+	refreshToken string
 }
 
 // InMemoryOAuth2AuthorizationService stores authorizations in memory
@@ -48,6 +55,7 @@ type InMemoryOAuth2AuthorizationService struct {
 	byAuthCode     map[string]*OAuth2Authorization
 	byAccessToken  map[string]*OAuth2Authorization
 	byRefreshToken map[string]*OAuth2Authorization
+	tracked        map[string]trackedTokens
 }
 
 func (this InMemoryOAuth2AuthorizationService) New() *InMemoryOAuth2AuthorizationService {
@@ -56,6 +64,7 @@ func (this InMemoryOAuth2AuthorizationService) New() *InMemoryOAuth2Authorizatio
 	this.byAuthCode = make(map[string]*OAuth2Authorization)
 	this.byAccessToken = make(map[string]*OAuth2Authorization)
 	this.byRefreshToken = make(map[string]*OAuth2Authorization)
+	this.tracked = make(map[string]trackedTokens)
 	return &this
 }
 
@@ -67,15 +76,52 @@ func (this *InMemoryOAuth2AuthorizationService) Save(auth *OAuth2Authorization) 
 	this.mu.Lock()
 	defer this.mu.Unlock()
 
+	prev := this.tracked[auth.ID]
+
+	var newCode, newAccess, newRefresh string
+	if auth.AuthorizationCode != nil {
+		newCode = auth.AuthorizationCode.Value
+	}
+	if auth.AccessToken != nil {
+		newAccess = auth.AccessToken.TokenValue
+	}
+	if auth.RefreshToken != nil {
+		newRefresh = auth.RefreshToken.TokenValue
+	}
+
+	// Remove stale entries when saving rotated values, ensuring cleanup does not remove
+	// an entry now owned by another authorization
+	if prev.code != "" && prev.code != newCode {
+		if existing, ok := this.byAuthCode[prev.code]; ok && existing.ID == auth.ID {
+			delete(this.byAuthCode, prev.code)
+		}
+	}
+	if prev.accessToken != "" && prev.accessToken != newAccess {
+		if existing, ok := this.byAccessToken[prev.accessToken]; ok && existing.ID == auth.ID {
+			delete(this.byAccessToken, prev.accessToken)
+		}
+	}
+	if prev.refreshToken != "" && prev.refreshToken != newRefresh {
+		if existing, ok := this.byRefreshToken[prev.refreshToken]; ok && existing.ID == auth.ID {
+			delete(this.byRefreshToken, prev.refreshToken)
+		}
+	}
+
 	this.byID[auth.ID] = auth
-	if auth.AuthorizationCode != nil && auth.AuthorizationCode.Value != "" {
-		this.byAuthCode[auth.AuthorizationCode.Value] = auth
+	if newCode != "" {
+		this.byAuthCode[newCode] = auth
 	}
-	if auth.AccessToken != nil && auth.AccessToken.TokenValue != "" {
-		this.byAccessToken[auth.AccessToken.TokenValue] = auth
+	if newAccess != "" {
+		this.byAccessToken[newAccess] = auth
 	}
-	if auth.RefreshToken != nil && auth.RefreshToken.TokenValue != "" {
-		this.byRefreshToken[auth.RefreshToken.TokenValue] = auth
+	if newRefresh != "" {
+		this.byRefreshToken[newRefresh] = auth
+	}
+
+	this.tracked[auth.ID] = trackedTokens{
+		code:         newCode,
+		accessToken:  newAccess,
+		refreshToken: newRefresh,
 	}
 	return nil
 }
@@ -84,17 +130,61 @@ func (this *InMemoryOAuth2AuthorizationService) Remove(auth *OAuth2Authorization
 	this.mu.Lock()
 	defer this.mu.Unlock()
 
+	prev, hasTracked := this.tracked[auth.ID]
+	if hasTracked {
+		if prev.code != "" {
+			if existing, ok := this.byAuthCode[prev.code]; ok && existing.ID == auth.ID {
+				delete(this.byAuthCode, prev.code)
+			}
+		}
+		if prev.accessToken != "" {
+			if existing, ok := this.byAccessToken[prev.accessToken]; ok && existing.ID == auth.ID {
+				delete(this.byAccessToken, prev.accessToken)
+			}
+		}
+		if prev.refreshToken != "" {
+			if existing, ok := this.byRefreshToken[prev.refreshToken]; ok && existing.ID == auth.ID {
+				delete(this.byRefreshToken, prev.refreshToken)
+			}
+		}
+		delete(this.tracked, auth.ID)
+	}
+
+	if auth.AuthorizationCode != nil && auth.AuthorizationCode.Value != "" {
+		if existing, ok := this.byAuthCode[auth.AuthorizationCode.Value]; ok && existing.ID == auth.ID {
+			delete(this.byAuthCode, auth.AuthorizationCode.Value)
+		}
+	}
+	if auth.AccessToken != nil && auth.AccessToken.TokenValue != "" {
+		if existing, ok := this.byAccessToken[auth.AccessToken.TokenValue]; ok && existing.ID == auth.ID {
+			delete(this.byAccessToken, auth.AccessToken.TokenValue)
+		}
+	}
+	if auth.RefreshToken != nil && auth.RefreshToken.TokenValue != "" {
+		if existing, ok := this.byRefreshToken[auth.RefreshToken.TokenValue]; ok && existing.ID == auth.ID {
+			delete(this.byRefreshToken, auth.RefreshToken.TokenValue)
+		}
+	}
+
 	delete(this.byID, auth.ID)
-	if auth.AuthorizationCode != nil {
-		delete(this.byAuthCode, auth.AuthorizationCode.Value)
-	}
-	if auth.AccessToken != nil {
-		delete(this.byAccessToken, auth.AccessToken.TokenValue)
-	}
-	if auth.RefreshToken != nil {
-		delete(this.byRefreshToken, auth.RefreshToken.TokenValue)
-	}
 	return nil
+}
+
+func (this *InMemoryOAuth2AuthorizationService) InvalidateAuthorizationCode(code string) (*OAuth2Authorization, Error) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+
+	auth, ok := this.byAuthCode[code]
+	if !ok || auth == nil || auth.AuthorizationCode == nil {
+		return nil, NewError("InvalidGrantError", "Invalid or unknown authorization code")
+	}
+
+	if auth.AuthorizationCode.Invalidated || time.Now().After(auth.AuthorizationCode.ExpiresAt) {
+		return nil, NewError("InvalidGrantError", "Authorization code has expired or was already used")
+	}
+
+	auth.AuthorizationCode.Invalidated = true
+	return auth, nil
 }
 
 func (this *InMemoryOAuth2AuthorizationService) FindByID(id string) (*OAuth2Authorization, Error) {

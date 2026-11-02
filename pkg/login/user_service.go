@@ -45,12 +45,7 @@ func NewDefaultOAuth2UserService(client *http.Client) *DefaultOAuth2UserService 
 func (this *DefaultOAuth2UserService) LoadUser(userRequest *OAuth2UserRequest) (OAuth2User, Error) {
 	userInfoURI := userRequest.ClientRegistration.ProviderDetails.UserInfoURI
 	if userInfoURI == "" {
-		// If no user info endpoint is defined, fallback to access token attributes
-		attrs := map[string]any{
-			subClaimName: userRequest.ClientRegistration.ClientID,
-		}
-		authorities := []GrantedAuthority{Authority("ROLE_USER")}
-		return DefaultOAuth2User{}.New(authorities, attrs, subClaimName), nil
+		return nil, NewError("InvalidConfigurationError", "userInfoURI is missing in client registration provider details")
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, userInfoURI, http.NoBody)

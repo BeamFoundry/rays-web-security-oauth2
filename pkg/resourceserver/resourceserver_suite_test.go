@@ -524,6 +524,44 @@ var _ = Describe("ResourceServer Additional Coverage", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(authCustom.GetName()).To(Equal("fallback-sub"))
 	})
+
+	It("authenticates bearer token when only JwtDecoder is configured in BearerTokenConfig", func() {
+		km, keyErr := RSAKeyManager{}.New(2048, "rs-cfg-key")
+		Expect(keyErr).NotTo(HaveOccurred())
+		encoder := NewDefaultJwtEncoder(km)
+		decoder := NewNimbusJwtDecoder(km)
+
+		now := time.Now()
+		claims := NewJwtClaimsSet()
+		claims.Subject = "jwt-cfg-user"
+		claims.IssuedAt = now
+		claims.ExpiresAt = now.Add(time.Hour)
+		tok, encErr := encoder.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+		Expect(encErr).NotTo(HaveOccurred())
+
+		ctxHolder := &mockSecurityContextHolder{}
+		filter := &BearerTokenAuthenticationFilter{}
+		builder := &HttpSecurityBuilder{}
+		cfg := &BearerTokenConfig{
+			JwtDecoder:            decoder,
+			SecurityContextHolder: ctxHolder,
+		}
+		builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
+		sec := builder.Build()
+		ctx := context.WithValue(context.Background(), PrototypeContextParentInstance, sec)
+		Expect(filter.WithContext(ctx)).To(Succeed())
+
+		u, parseErr := url.Parse("https://api.example.com/data")
+		Expect(parseErr).NotTo(HaveOccurred())
+		h := NewMockSecurityHandler(HttpMethods.GET, u)
+		h.SetHeader("Authorization", "Bearer "+tok.TokenValue)
+
+		authResult := filter.Authenticate(h)
+		Expect(authResult).To(HaveOccurred())
+		Expect(authResult.Action()).To(Equal(DefaultSecurityFilterAction{}.New().NEXT.Name()))
+		Expect(ctxHolder.GetContext().GetAuthentication()).NotTo(BeNil())
+		Expect(ctxHolder.GetContext().GetAuthentication().GetName()).To(Equal("jwt-cfg-user"))
+	})
 })
 
 type failingJwtConverter struct{}

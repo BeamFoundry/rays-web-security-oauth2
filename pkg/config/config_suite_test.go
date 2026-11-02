@@ -264,9 +264,7 @@ var _ = Describe("OAuth2 Configurers DSL", func() {
 			loginConf := NewOAuth2LoginConfigurer(builder).
 				AuthorizationRequestRepository(SessionAuthorizationRequestRepository{}.New()).
 				LoginProcessingURL("/login/oauth2/code/*").
-				AuthorizationBaseURI("/oauth2/authorization").
-				UserService(DefaultOAuth2UserService{}.New(nil)).
-				OidcUserService(DefaultOidcUserService{}.New(nil))
+				AuthorizationBaseURI("/oauth2/authorization")
 			Expect(loginConf.And()).To(Equal(builder))
 
 			// Resource server configurer

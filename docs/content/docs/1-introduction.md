@@ -21,7 +21,7 @@ Rays Web Security structures web security around declarative **Security Filter C
 | `SecurityEndpointRegistration` | `OAuth2LoginAuthenticationFilter`, `OAuth2AuthorizationServerFilter` | Automatically binds technical endpoints (`/oauth2/authorization/{id}`, `/login/oauth2/code/{id}`, `/oauth2/authorize`, `/oauth2/token`, `/oauth2/jwks`, etc.) to the underlying web router. |
 | `Authentication` | `OAuth2AuthenticationToken`, `OAuth2LoginAuthenticationToken`, `BearerTokenAuthenticationToken`, `JwtAuthenticationToken` | Encapsulates unauthenticated requests and authenticated principals, authorities, and credentials. |
 | `AuthenticationManager` | *(Already provided by `rays-web-security`)* | Injected into OAuth2 filters. It automatically routes authentication requests to matching providers. |
-| `AuthenticationProvider` | `OAuth2LoginAuthenticationProvider`, `JwtAuthenticationProvider`, `OpaqueTokenAuthenticationProvider` | Specialized providers implementing `Supports(auth)` and `Authenticate(auth)`. Auto-injected into the `AuthenticationManager`. |
+| `AuthenticationProvider` | `OAuth2LoginAuthenticationProvider`, `JwtAuthenticationProvider` | Specialized providers implementing `Supports(auth)` and `Authenticate(auth)`. Auto-injected into the `AuthenticationManager`. |
 | `SecurityContextHolder` | `securityContextHolder.GetContext().SetAuthentication(...)` | Stores the authenticated `Authentication` in routine-local storage, accessible anywhere downstream. |
 
 ---
@@ -43,7 +43,6 @@ An essential design principle of Rays Web Security is its pluggable provider arc
    Rather than reinventing an authentication manager, `rays-web-security-oauth2` defines domain-specific providers:
    *   `OAuth2LoginAuthenticationProvider`: Authenticates authorization codes and exchanges them for user profiles.
    *   `JwtAuthenticationProvider`: Validates JWT Bearer tokens and extracts granted authorities.
-   *   `OpaqueTokenAuthenticationProvider`: Validates opaque tokens via RFC 7662 introspection.
 3. **Automatic Provider Routing:**
    When you register one of these providers as a Beam, `rays-web-security`'s `AuthenticationManager` automatically detects it. When a filter calls:
    ```go
@@ -72,7 +71,7 @@ An essential design principle of Rays Web Security is its pluggable provider arc
 1. **OAuth2 Login (`pkg/login`):** Enables user authentication into your web application via external identity providers (Google, GitHub, Keycloak, etc.) with automatic session establishment.
 2. **OAuth2 Client (`pkg/client`):** Manages OAuth2 client credentials, access tokens, refresh tokens, and outbound authorized API requests.
 3. **OAuth2 Resource Server (`pkg/resourceserver`):** Protects HTTP APIs by validating incoming Bearer JWT or opaque tokens against signatures, expiration, issuers, and audiences.
-4. **OAuth2 Authorization Server (`pkg/server`):** Full RFC 6749 / OAuth 2.1 / OIDC 1.0 Authorization Server that authenticates clients, validates authorization codes with PKCE, and issues signed JWTs.
+4. **OAuth2 Authorization Server (`pkg/server`):** Full RFC 6749 / OAuth 2.1 Authorization Server that authenticates clients, validates authorization codes with PKCE, and issues signed JWTs.
 
 ---
 

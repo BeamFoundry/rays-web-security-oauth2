@@ -184,7 +184,7 @@ func (this *OAuth2LoginAuthenticationFilter) RegisterSecurityEndpoint(router Sec
 				return handler.Error(404, "Client registration not found: "+registrationID)
 			}
 
-			authReq, genErr := GenerateAuthorizationRequest(reg)
+			authReq, genErr := GenerateAuthorizationRequest(reg, handler)
 			if genErr != nil {
 				genErr.LogError()
 				return handler.Error(500, "Failed to generate authorization request: "+genErr.Error())

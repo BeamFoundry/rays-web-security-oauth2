@@ -79,7 +79,7 @@ Rays Web Security structures web security around declarative **Security Filter C
 | `SecurityEndpointRegistration` | `OAuth2LoginAuthenticationFilter`, `OAuth2AuthorizationServerFilter` | Automatically binds technical endpoints (`/oauth2/authorization/{id}`, `/login/oauth2/code/{id}`, `/oauth2/authorize`, `/oauth2/token`, `/oauth2/jwks`, etc.) to the underlying web router. |
 | `Authentication` | `OAuth2AuthenticationToken`, `OAuth2LoginAuthenticationToken`, `BearerTokenAuthenticationToken`, `JwtAuthenticationToken` | Encapsulates unauthenticated requests and authenticated principals, authorities, and credentials. |
 | `AuthenticationManager` | *(Provided by `rays-web-security`)* | Injected into OAuth2 filters. It automatically routes authentication requests to matching providers. |
-| `AuthenticationProvider` | `OAuth2LoginAuthenticationProvider`, `JwtAuthenticationProvider`, `OpaqueTokenAuthenticationProvider` | Specialized providers implementing `Supports(auth)` and `Authenticate(auth)`. Auto-injected into `AuthenticationManager`. |
+| `AuthenticationProvider` | `OAuth2LoginAuthenticationProvider`, `JwtAuthenticationProvider` | Specialized providers implementing `Supports(auth)` and `Authenticate(auth)`. Auto-injected into `AuthenticationManager`. |
 | `SecurityContextHolder` | `securityContextHolder.GetContext().SetAuthentication(...)` | Stores the authenticated `Authentication` in routine-local storage, accessible anywhere downstream. |
 
 ### The `AuthenticationManager` & `AuthenticationProvider` Relationship
@@ -99,7 +99,6 @@ An essential design principle of Rays Web Security is its pluggable provider arc
    Rather than reinventing an authentication manager, `rays-web-security-oauth2` defines domain-specific providers:
    - `OAuth2LoginAuthenticationProvider`: Authenticates authorization codes and exchanges them for user profiles.
    - `JwtAuthenticationProvider`: Validates JWT Bearer tokens and extracts granted authorities.
-   - `OpaqueTokenAuthenticationProvider`: Validates opaque tokens via RFC 7662 introspection.
 3. **Automatic Provider Routing:**
    When you register one of these providers as a Beam, `rays-web-security`'s `AuthenticationManager` automatically detects it. When a filter calls `this.authenticationManager.Authenticate(token)`, the manager iterates through its providers, calls `Supports(token)`, and delegates execution to your OAuth2 provider.
 4. **Routine-Local Context Registration:**
@@ -558,7 +557,7 @@ An **OAuth2 Resource Server** protects HTTP endpoints by validating incoming OAu
 
 3. Creates unauthenticated BearerTokenAuthenticationToken.
 
-4. AuthenticationManager delegates to JwtAuthenticationProvider (or OpaqueTokenAuthenticationProvider).
+4. AuthenticationManager delegates to JwtAuthenticationProvider.
 
 5. JwtDecoder verifies signature using JWK Set (public keys) and checks:
    - exp (expiration with configurable clock skew)
@@ -636,23 +635,16 @@ AuthorizedHTTPRequests().
 
 ### Opaque Tokens & Introspection
 
-For architectures utilizing opaque (stateful) access tokens, configure `OpaqueTokenAuthenticationProvider`:
-
-```go
-provider := OpaqueTokenAuthenticationProvider{}.New(
-    "https://auth.company.com/oauth2/introspect",
-    "resource-server-id",
-    "resource-server-secret",
-)
-```
-
-The provider issues an RFC 7662 POST request to verify the token's active status and map claims.
+> [!NOTE]
+> Resource-server support for opaque tokens via `OpaqueTokenAuthenticationProvider` is currently unavailable. Opaque token introspection flow on the Resource Server side is planned for a future release; currently, Resource Server token validation is supported via stateless JWT verification (`JwtAuthenticationProvider` with `JwtDecoder`).
+>
+> The Authorization Server provides an RFC 7662 introspection endpoint at `/oauth2/introspect` for clients to query token status. Resource Server integration using an introspection provider will be documented once the provider and its registration exist.
 
 ---
 
-## OAuth 2.1 / OIDC 1.0 Authorization Server
+## OAuth 2.1 Authorization Server
 
-**Rays Web Security OAuth2 Authorization Server** is a full-featured, standards-compliant OAuth 2.1 and OpenID Connect 1.0 server implementation modeled after the **Spring Authorization Server** project.
+**Rays Web Security OAuth2 Authorization Server** is a full-featured, standards-compliant OAuth 2.0 / OAuth 2.1 authorization server implementation modeled after the **Spring Authorization Server** project. Note that while discovery metadata (`/.well-known/openid-configuration`) is supported for OAuth metadata discovery, the current token response path does not emit OIDC ID tokens; this module currently functions as an OAuth authorization server without OpenID Connect provider support.
 
 ### Architecture Overview
 
@@ -779,6 +771,9 @@ encoder := JwxJwtEncoder{}.New(ed25519PrivateKey, jwa.EdDSA(), "key-eddsa")
 // 3. RSA-PSS (PS256)
 encoder := JwxJwtEncoder{}.New(rsaPrivateKey, jwa.PS256(), "key-ps256")
 ```
+
+> [!IMPORTANT]
+> The `/oauth2/jwks` endpoint serves the public keys from the separately configured `JWKSource` Beam, **not** directly from `JwxJwtEncoder`. When configuring a custom token encoder (such as the ES256, EdDSA, or PS256 examples above), ensure that your registered `JWKSource` and the encoder share the exact same underlying key material and key identifier (`kid`) so that client applications and Resource Servers can successfully verify token signatures.
 
 ---
 
@@ -1031,7 +1026,7 @@ Given the security-critical nature of OAuth 2.0 / OpenID Connect implementations
    - **Header Injection & Path Traversal:** Safe handling of malicious `kid` headers (`../../../../etc/passwd`, SQL injection strings, XSS payloads).
    - **Time Boundary Verification:** Strict enforcement of `exp` and `nbf` against allowable clock skew.
 2. **Authorization Code Single-Use & Replay Race Prevention (`pkg/server/concurrency_test.go`):**
-   - Enforces synchronized atomic single-use exchange of authorization codes via `codeMu *sync.Mutex` in `OAuth2AuthorizationServerFilter` (RFC 6749 §4.1.2).
+   - Enforces synchronized atomic single-use exchange of authorization codes in `OAuth2AuthorizationService` (RFC 6749 §4.1.2).
    - **High Concurrency Race Test:** 50 simultaneous goroutines released at the exact same millisecond attempting to exchange the same authorization code.
    - Exactly **1 request succeeds** (HTTP 200) and **49 requests are cleanly rejected** with `invalid_grant` (HTTP 400).
    - Verified under `go test -race` with **0 data races**.

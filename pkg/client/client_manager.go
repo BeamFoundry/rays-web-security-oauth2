@@ -89,6 +89,13 @@ func (this *DefaultOAuth2AuthorizedClientManager) Authorize(request *OAuth2Autho
 		request.AuthorizedClient = client
 	}
 
+	if request.AuthorizedClient != nil && request.AuthorizedClient.AccessToken != nil {
+		token := request.AuthorizedClient.AccessToken
+		if token.ExpiresAt.IsZero() || !time.Now().Add(60*time.Second).After(token.ExpiresAt) {
+			return request.AuthorizedClient, nil
+		}
+	}
+
 	for _, provider := range this.providers {
 		if provider.Supports(request) {
 			authorizedClient, err := provider.Authorize(request)
@@ -115,7 +122,7 @@ type RefreshTokenAuthorizedClientProvider struct {
 
 func (this RefreshTokenAuthorizedClientProvider) New(client *http.Client) *RefreshTokenAuthorizedClientProvider {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	this.httpClient = client
 	this.clockSkew = 60 * time.Second
@@ -220,7 +227,7 @@ type ClientCredentialsAuthorizedClientProvider struct {
 
 func (this ClientCredentialsAuthorizedClientProvider) New(client *http.Client) *ClientCredentialsAuthorizedClientProvider {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	this.httpClient = client
 	return &this

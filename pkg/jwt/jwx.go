@@ -176,7 +176,8 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 	headersMap, _, unverifiedErr := parseUnverified(tokenString)
 	if unverifiedErr != nil || headersMap == nil {
 		headersMap = make(map[string]any)
-		parts := strings.Split(tokenString, ".")
+		normalizedToken := strings.TrimSpace(tokenString)
+		parts := strings.Split(normalizedToken, ".")
 		if len(parts) == 3 {
 			if headerBytes, b64Err := base64.RawURLEncoding.DecodeString(parts[0]); b64Err == nil {
 				Try(func() {

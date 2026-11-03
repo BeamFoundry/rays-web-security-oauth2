@@ -796,7 +796,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 		})
 
 		It("tests DefaultJwtEncoder signing error when RSA key is too small", func() {
-			smallKey := &rsa.PrivateKey{PublicKey: rsa.PublicKey{N: big.NewInt(1), E: 65537}}
+			smallKey := &rsa.PrivateKey{N: big.NewInt(1), E: 65537}
 			mockSource := &testMockJWKSource{secret: smallKey, alg: AlgRS256}
 			enc := NewDefaultJwtEncoder(mockSource)
 
@@ -848,6 +848,34 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(decoded.Headers).To(HaveKeyWithValue("kid", "k-test"))
 			Expect(decoded.Headers).To(HaveKeyWithValue("alg", "RS256"))
 			Expect(decoded.Subject()).To(Equal("sub-1"))
+		})
+
+		It("tests JwxJwtDecoder.Decode handles surrounding whitespace and yields header and KeyID", func() {
+			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test-whitespace")
+			claims := NewJwtClaimsSet()
+			claims.Subject = "sub-ws"
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			tok, encErr := jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			pubJWK, err := jwk.Import(&rsaPriv.PublicKey)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pubJWK.Set(jwk.KeyIDKey, "k-test-whitespace")).To(Succeed())
+			Expect(pubJWK.Set(jwk.AlgorithmKey, jwa.RS256())).To(Succeed())
+			keySet := jwk.NewSet()
+			Expect(keySet.AddKey(pubJWK)).To(Succeed())
+
+			dec := NewJwxJwtDecoderWithKeySet(keySet)
+			tokenWithWhitespace := " \t\n " + tok.TokenValue + " \n\r "
+			decoded, decErr := dec.Decode(tokenWithWhitespace)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decoded).NotTo(BeNil())
+			Expect(decoded.KeyID()).To(Equal("k-test-whitespace"))
+			Expect(decoded.Headers).To(HaveKeyWithValue("kid", "k-test-whitespace"))
+			Expect(decoded.Headers).To(HaveKeyWithValue("alg", "RS256"))
+			Expect(decoded.Subject()).To(Equal("sub-ws"))
 		})
 	})
 })

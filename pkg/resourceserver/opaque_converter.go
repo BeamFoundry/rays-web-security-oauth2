@@ -15,24 +15,16 @@ type OpaqueTokenAuthenticationConverter interface {
 }
 
 // DefaultOpaqueTokenAuthenticationConverter is the default implementation of OpaqueTokenAuthenticationConverter
-type DefaultOpaqueTokenAuthenticationConverter struct {
-	authorityPrefix string
-}
+type DefaultOpaqueTokenAuthenticationConverter struct{}
 
 var _ OpaqueTokenAuthenticationConverter = &DefaultOpaqueTokenAuthenticationConverter{}
 
 func (this DefaultOpaqueTokenAuthenticationConverter) New() *DefaultOpaqueTokenAuthenticationConverter {
-	this.authorityPrefix = defaultAuthorityPrefix
 	return &this
 }
 
 func NewDefaultOpaqueTokenAuthenticationConverter() *DefaultOpaqueTokenAuthenticationConverter {
 	return DefaultOpaqueTokenAuthenticationConverter{}.New()
-}
-
-func (this *DefaultOpaqueTokenAuthenticationConverter) WithAuthorityPrefix(prefix string) *DefaultOpaqueTokenAuthenticationConverter {
-	this.authorityPrefix = prefix
-	return this
 }
 
 func (this *DefaultOpaqueTokenAuthenticationConverter) Convert(token string, principal OAuth2AuthenticatedPrincipal) (Authentication, Error) {

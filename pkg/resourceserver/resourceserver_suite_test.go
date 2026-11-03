@@ -850,7 +850,7 @@ var _ = Describe("DefaultOpaqueTokenAuthenticationConverter", func() {
 	})
 
 	It("rejects nil principal", func() {
-		conv := DefaultOpaqueTokenAuthenticationConverter{}.New().WithAuthorityPrefix("ROLE_")
+		conv := DefaultOpaqueTokenAuthenticationConverter{}.New()
 		_, err := conv.Convert("raw", nil)
 		Expect(err).To(HaveOccurred())
 	})
@@ -1020,12 +1020,28 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		Expect(h.Header("WWW-Authenticate")).To(ContainSubstring(`error="invalid_token"`))
 	})
 
-	It("handles nil principal and nil token in BearerTokenAuthentication", func() {
+	It("handles nil and non-nil principal in BearerTokenAuthentication", func() {
 		auth := BearerTokenAuthentication{}.New(nil, nil, nil)
 		Expect(auth.GetName()).To(Equal(""))
 		Expect(auth.GetCredentials()).To(Equal(""))
+		Expect(auth.GetPrincipal()).To(BeNil())
 		Expect(auth.GetToken()).To(BeNil())
 		Expect(auth.GetAttributes()).To(BeEmpty())
+
+		p := NewDefaultOAuth2AuthenticatedPrincipal("alice", map[string]any{"sub": "alice"}, nil)
+		authWithPrin := NewBearerTokenAuthentication(p, nil, nil)
+		Expect(authWithPrin.GetName()).To(Equal("alice"))
+		Expect(authWithPrin.GetPrincipal()).To(Equal(p))
+
+		// Principal implementing interface{ GetName() string } but not OAuth2AuthenticatedPrincipal
+		authWithNamed := NewBearerTokenAuthentication(nil, nil, nil)
+		authWithNamed.Principal = &mockSimpleAuth{}
+		Expect(authWithNamed.GetName()).To(Equal("simple"))
+
+		// Principal not implementing GetName
+		authWithOther := NewBearerTokenAuthentication(nil, nil, nil)
+		authWithOther.Principal = 12345
+		Expect(authWithOther.GetName()).To(Equal(""))
 	})
 
 	It("handles various scp formats, int64 exp/iat, and nil principal in DefaultOpaqueTokenAuthenticationConverter", func() {
@@ -1073,6 +1089,84 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		bAuth3, ok := auth3.(*BearerTokenAuthentication)
 		Expect(ok).To(BeTrue())
 		Expect(bAuth3.GetToken().Scopes).To(ConsistOf("read", "custom"))
+	})
+
+	It("validates HTTPS or loopback requirement on introspectionURI and prevents insecure redirects", func() {
+		// Non-loopback HTTP is rejected
+		insecureIntro := NewNimbusOpaqueTokenIntrospector("http://insecure-host.example.com/oauth2/introspect", "c", "s")
+		_, err := insecureIntro.Introspect("tok")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("must use HTTPS unless host is loopback"))
+
+		// Unsupported scheme is rejected
+		ftpIntro := NewNimbusOpaqueTokenIntrospector("ftp://localhost/oauth2/introspect", "c", "s")
+		_, ftpErr := ftpIntro.Introspect("tok")
+		Expect(ftpErr).To(HaveOccurred())
+		Expect(ftpErr.Error()).To(ContainSubstring("must use HTTPS or HTTP for loopback"))
+
+		// Redirect to non-loopback HTTP is rejected by secure redirect policy
+		redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://remote-attacker.example.com/target", http.StatusFound)
+		}))
+		defer redirectServer.Close()
+
+		redirectIntro := NewNimbusOpaqueTokenIntrospector(redirectServer.URL, "c", "s")
+		_, redirErr := redirectIntro.Introspect("tok")
+		Expect(redirErr).To(HaveOccurred())
+		Expect(redirErr.Error()).To(ContainSubstring("insecure redirect in token introspection"))
+	})
+
+	It("rejects zero and negative exp timestamps as expired with zero clock skew", func() {
+		// Exp = 0 with zero clock skew
+		serverZero := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "zero-exp-user",
+				"exp":    0,
+			})).To(Succeed())
+		}))
+		defer serverZero.Close()
+
+		introZero := NewNimbusOpaqueTokenIntrospector(serverZero.URL, "c", "s").WithClockSkew(0)
+		_, errZero := introZero.Introspect("tok")
+		Expect(errZero).To(HaveOccurred())
+		Expect(errZero.Error()).To(ContainSubstring("token has expired"))
+
+		// Exp = -100 with zero clock skew
+		serverNeg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "neg-exp-user",
+				"exp":    -100,
+			})).To(Succeed())
+		}))
+		defer serverNeg.Close()
+
+		introNeg := NewNimbusOpaqueTokenIntrospector(serverNeg.URL, "c", "s").WithClockSkew(0)
+		_, errNeg := introNeg.Introspect("tok")
+		Expect(errNeg).To(HaveOccurred())
+		Expect(errNeg.Error()).To(ContainSubstring("token has expired"))
+
+		// Non-numeric exp (e.g. "not-a-number") is ignored and token is accepted
+		serverNonNum := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "str-exp-user",
+				"exp":    "not-a-number",
+			})).To(Succeed())
+		}))
+		defer serverNonNum.Close()
+
+		introNonNum := NewNimbusOpaqueTokenIntrospector(serverNonNum.URL, "c", "s").WithClockSkew(0)
+		prinNonNum, errNonNum := introNonNum.Introspect("tok")
+		Expect(errNonNum).NotTo(HaveOccurred())
+		Expect(prinNonNum.GetName()).To(Equal("str-exp-user"))
 	})
 
 	It("handles int64 and json.Number exp/nbf, empty authority prefix, and request errors", func() {
@@ -1171,11 +1265,15 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(auth.GetName()).To(Equal("lazy-user"))
 
-		// Introspector returning generic error
-		errIntro := NewNimbusOpaqueTokenIntrospector("://bad", "c", "s")
+		// Introspector returning generic error returns fixed client-safe description "invalid token"
+		errIntro := NewNimbusOpaqueTokenIntrospector("http://insecure-host.example.com", "c", "s")
 		pErr := NewOpaqueTokenAuthenticationProvider(errIntro)
 		_, errAuth := pErr.Authenticate(token)
 		Expect(errAuth).To(HaveOccurred())
+		oauthEx, isOAuthEx := errAuth.(*OAuth2AuthenticationException)
+		Expect(isOAuthEx).To(BeTrue())
+		Expect(oauthEx.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthEx.OAuth2Error().ErrorDescription).To(Equal("invalid token"))
 	})
 
 	It("tests bearerAuthenticationManager fallback chaining and unsupported auth", func() {

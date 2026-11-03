@@ -3,8 +3,10 @@ package resourceserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -114,6 +116,10 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 		)
 	}
 
+	if valErr := validateIntrospectionURI(this.introspectionURI); valErr != nil {
+		return nil, valErr
+	}
+
 	timeout := this.timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -140,7 +146,22 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 		client = http.DefaultClient
 	}
 
-	resp, doErr := client.Do(req)
+	secureClient := *client
+	originalCheckRedirect := client.CheckRedirect
+	secureClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if redirectErr := validateIntrospectionURI(req.URL.String()); redirectErr != nil {
+			return fmt.Errorf("insecure redirect in token introspection: %w", redirectErr)
+		}
+		if originalCheckRedirect != nil {
+			return originalCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+
+	resp, doErr := secureClient.Do(req)
 	if doErr != nil {
 		return nil, NewErrorFrom(doErr)
 	}
@@ -190,18 +211,22 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	now := time.Now()
 	if expVal, exists := claims["exp"]; exists {
 		var expSec int64
+		var parsed bool
 		switch v := expVal.(type) {
 		case float64:
 			expSec = int64(v)
+			parsed = true
 		case int64:
 			expSec = v
+			parsed = true
 		case json.Number:
-			if parsed, parseErr := v.Int64(); parseErr == nil {
-				expSec = parsed
+			if p, parseErr := v.Int64(); parseErr == nil {
+				expSec = p
+				parsed = true
 			}
 		default:
 		}
-		if expSec > 0 {
+		if parsed {
 			expTime := time.Unix(expSec, 0)
 			if now.Add(-this.clockSkew).After(expTime) {
 				return nil, OAuth2AuthenticationException{}.New(
@@ -302,4 +327,30 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	}
 
 	return NewDefaultOAuth2AuthenticatedPrincipal(principalName, claims, authorities), nil
+}
+
+func validateIntrospectionURI(rawURI string) Error {
+	parsed, err := url.Parse(rawURI)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return NewError("IllegalArgumentException", "invalid introspection URI")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme == "https" {
+		return nil
+	}
+	if scheme == "http" {
+		if isLoopbackHost(parsed.Hostname()) {
+			return nil
+		}
+		return NewError("IllegalArgumentException", "introspection URI must use HTTPS unless host is loopback")
+	}
+	return NewError("IllegalArgumentException", "introspection URI must use HTTPS or HTTP for loopback")
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

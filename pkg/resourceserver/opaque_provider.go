@@ -90,7 +90,7 @@ func (this *OpaqueTokenAuthenticationProvider) Authenticate(auth Authentication)
 			return auth, authEx
 		}
 		return auth, OAuth2AuthenticationException{}.New(
-			OAuth2Error{ErrorCode: OAuth2ErrorInvalidToken, ErrorDescription: "invalid token: " + err.Error()},
+			OAuth2Error{ErrorCode: OAuth2ErrorInvalidToken, ErrorDescription: "invalid token"},
 			auth,
 		)
 	}

@@ -81,9 +81,8 @@ func (this *JwtAuthenticationToken) GetCredentials() any {
 
 // BearerTokenAuthentication represents an authenticated bearer token verified via introspection
 type BearerTokenAuthentication struct {
-	Principal  OAuth2AuthenticatedPrincipal `json:"principal"`
-	Token      *OAuth2AccessToken           `json:"token"`
-	Attributes map[string]any               `json:"attributes"`
+	Token      *OAuth2AccessToken `json:"token"`
+	Attributes map[string]any     `json:"attributes"`
 	AbstractAuthenticationToken
 }
 
@@ -113,8 +112,14 @@ func NewBearerTokenAuthentication(
 }
 
 func (this *BearerTokenAuthentication) GetName() string {
-	if this.Principal != nil {
-		return this.Principal.GetName()
+	if this.Principal == nil {
+		return ""
+	}
+	if p, ok := this.Principal.(OAuth2AuthenticatedPrincipal); ok && p != nil {
+		return p.GetName()
+	}
+	if p, ok := this.Principal.(interface{ GetName() string }); ok && p != nil {
+		return p.GetName()
 	}
 	return ""
 }

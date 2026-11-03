@@ -13,6 +13,7 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/web"
 )
 
+// FuzzHandleAuthorizeRedirect fuzzes the authorization endpoint redirect URI and state validation.
 func FuzzHandleAuthorizeRedirect(f *testing.F) {
 	km, err := RSAKeyManager{}.New(2048, "fuzz-key")
 	if err != nil {

@@ -36,15 +36,23 @@ type OAuth2Authorization struct {
 
 // OAuth2AuthorizationService manages authorization sessions
 type OAuth2AuthorizationService interface {
+	// Save persists a new or updated OAuth2Authorization.
 	Save(authorization *OAuth2Authorization) Error
+	// Remove deletes an OAuth2Authorization and all associated token indexes.
 	Remove(authorization *OAuth2Authorization) Error
+	// FindByID retrieves an OAuth2Authorization by its unique identifier.
 	FindByID(id string) (*OAuth2Authorization, Error)
+	// FindByToken retrieves an OAuth2Authorization by a token value and token type hint ("code", "access_token", or "refresh_token").
 	FindByToken(token, tokenType string) (*OAuth2Authorization, Error)
+	// InvalidateAuthorizationCode atomically marks an authorization code as used and returns its OAuth2Authorization.
 	InvalidateAuthorizationCode(code string) (*OAuth2Authorization, Error)
+	// ConsumeRefreshToken atomically marks a refresh token as consumed and returns its OAuth2Authorization.
 	ConsumeRefreshToken(token string) (*OAuth2Authorization, Error)
+	// SaveTokens atomically updates the access and refresh tokens for an authorization while verifying the previous refresh token.
 	SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error
 }
 
+// trackedTokens records the currently indexed token values for an authorization ID to clean up rotated tokens.
 type trackedTokens struct {
 	code         string
 	accessToken  string
@@ -61,6 +69,7 @@ type InMemoryOAuth2AuthorizationService struct {
 	tracked        map[string]trackedTokens
 }
 
+// New creates a new thread-safe InMemoryOAuth2AuthorizationService.
 func (this InMemoryOAuth2AuthorizationService) New() *InMemoryOAuth2AuthorizationService {
 	this.mu = &sync.RWMutex{}
 	this.byID = make(map[string]*OAuth2Authorization)
@@ -71,16 +80,19 @@ func (this InMemoryOAuth2AuthorizationService) New() *InMemoryOAuth2Authorizatio
 	return &this
 }
 
+// NewInMemoryOAuth2AuthorizationService creates a new InMemoryOAuth2AuthorizationService.
 func NewInMemoryOAuth2AuthorizationService() *InMemoryOAuth2AuthorizationService {
 	return InMemoryOAuth2AuthorizationService{}.New()
 }
 
+// Save stores or updates an OAuth2Authorization and indexes its tokens in memory.
 func (this *InMemoryOAuth2AuthorizationService) Save(auth *OAuth2Authorization) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
 	return this.saveLocked(auth)
 }
 
+// saveLocked persists the authorization and updates token lookup maps while holding the write lock.
 func (this *InMemoryOAuth2AuthorizationService) saveLocked(auth *OAuth2Authorization) Error {
 	prev := this.tracked[auth.ID]
 
@@ -132,6 +144,7 @@ func (this *InMemoryOAuth2AuthorizationService) saveLocked(auth *OAuth2Authoriza
 	return nil
 }
 
+// Remove deletes an OAuth2Authorization and all of its associated token lookup entries from memory.
 func (this *InMemoryOAuth2AuthorizationService) Remove(auth *OAuth2Authorization) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -176,6 +189,7 @@ func (this *InMemoryOAuth2AuthorizationService) Remove(auth *OAuth2Authorization
 	return nil
 }
 
+// InvalidateAuthorizationCode validates that an authorization code is active and marks it as invalidated for single use.
 func (this *InMemoryOAuth2AuthorizationService) InvalidateAuthorizationCode(code string) (*OAuth2Authorization, Error) {
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -193,6 +207,7 @@ func (this *InMemoryOAuth2AuthorizationService) InvalidateAuthorizationCode(code
 	return auth, nil
 }
 
+// ConsumeRefreshToken validates that a refresh token is active and marks it as invalidated for rotation.
 func (this *InMemoryOAuth2AuthorizationService) ConsumeRefreshToken(token string) (*OAuth2Authorization, Error) {
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -210,6 +225,7 @@ func (this *InMemoryOAuth2AuthorizationService) ConsumeRefreshToken(token string
 	return auth, nil
 }
 
+// SaveTokens updates the access and refresh tokens for the specified authorization ID after verifying the expected old refresh token.
 func (this *InMemoryOAuth2AuthorizationService) SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -231,6 +247,7 @@ func (this *InMemoryOAuth2AuthorizationService) SaveTokens(authID, expectedOldRe
 	return this.saveLocked(auth)
 }
 
+// FindByID retrieves an OAuth2Authorization by its ID from memory.
 func (this *InMemoryOAuth2AuthorizationService) FindByID(id string) (*OAuth2Authorization, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
@@ -242,6 +259,7 @@ func (this *InMemoryOAuth2AuthorizationService) FindByID(id string) (*OAuth2Auth
 	return auth, nil
 }
 
+// FindByToken retrieves an OAuth2Authorization by token value and token type ("code", "access_token", or "refresh_token").
 func (this *InMemoryOAuth2AuthorizationService) FindByToken(token, tokenType string) (*OAuth2Authorization, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()

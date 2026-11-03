@@ -25,14 +25,17 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/web"
 )
 
+// KeycloakResourceServerConfig is a test configuration that sets up an OAuth2 JWT resource server backed by Keycloak.
 type KeycloakResourceServerConfig struct {
 	Configuration
 }
 
+// New creates a new KeycloakResourceServerConfig instance.
 func (this KeycloakResourceServerConfig) New() *KeycloakResourceServerConfig {
 	return &this
 }
 
+// HttpSecurity builds the HTTP security filter chain for the JWT resource server test.
 func (this *KeycloakResourceServerConfig) HttpSecurity() *HttpSecurity {
 	return (&HttpSecurityBuilder{}).
 		With(OAuth2ResourceServer).
@@ -49,23 +52,28 @@ func (this *KeycloakResourceServerConfig) HttpSecurity() *HttpSecurity {
 		Build()
 }
 
+// JwtDecoder creates a JwtDecoder backed by the Keycloak realm's remote JWKS endpoint.
 func (this *KeycloakResourceServerConfig) JwtDecoder() JwtDecoder {
 	jwks := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", keycloakBaseURL, realmName)
 	return NewJwxJwtDecoderWithRemoteJWKS(jwks)
 }
 
+// JwtAuthenticationConverter creates a JwtAuthenticationConverter using "preferred_username" as the principal claim.
 func (this *KeycloakResourceServerConfig) JwtAuthenticationConverter() JwtAuthenticationConverter {
 	return NewDefaultJwtAuthenticationConverter().WithPrincipalClaimName("preferred_username")
 }
 
+// KeycloakOpaqueTokenResourceServerConfig is a test configuration that sets up an OAuth2 opaque token resource server via DSL.
 type KeycloakOpaqueTokenResourceServerConfig struct {
 	Configuration
 }
 
+// New creates a new KeycloakOpaqueTokenResourceServerConfig instance.
 func (this KeycloakOpaqueTokenResourceServerConfig) New() *KeycloakOpaqueTokenResourceServerConfig {
 	return &this
 }
 
+// HttpSecurity builds the HTTP security filter chain for the opaque token resource server DSL test.
 func (this *KeycloakOpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurity {
 	introspectURI := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token/introspect", keycloakBaseURL, realmName)
 	return (&HttpSecurityBuilder{}).
@@ -83,14 +91,17 @@ func (this *KeycloakOpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurit
 		Build()
 }
 
+// KeycloakOpaqueTokenBeanResourceServerConfig is a test configuration that provides an OpaqueTokenIntrospector bean via DI.
 type KeycloakOpaqueTokenBeanResourceServerConfig struct {
 	Configuration
 }
 
+// New creates a new KeycloakOpaqueTokenBeanResourceServerConfig instance.
 func (this KeycloakOpaqueTokenBeanResourceServerConfig) New() *KeycloakOpaqueTokenBeanResourceServerConfig {
 	return &this
 }
 
+// HttpSecurity builds the HTTP security filter chain for the DI-managed opaque token resource server test.
 func (this *KeycloakOpaqueTokenBeanResourceServerConfig) HttpSecurity() *HttpSecurity {
 	return (&HttpSecurityBuilder{}).
 		With(OAuth2ResourceServer).
@@ -104,6 +115,7 @@ func (this *KeycloakOpaqueTokenBeanResourceServerConfig) HttpSecurity() *HttpSec
 		Build()
 }
 
+// OpaqueTokenIntrospector creates an OpaqueTokenIntrospector bean backed by the Keycloak introspection endpoint.
 func (this *KeycloakOpaqueTokenBeanResourceServerConfig) OpaqueTokenIntrospector() OpaqueTokenIntrospector {
 	introspectURI := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token/introspect", keycloakBaseURL, realmName)
 	return NewNimbusOpaqueTokenIntrospector(introspectURI, "rays-service-client", "service-client-secret").

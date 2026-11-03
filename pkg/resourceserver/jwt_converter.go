@@ -10,6 +10,7 @@ import (
 
 // JwtAuthenticationConverter converts a decoded JWT into an authenticated Authentication
 type JwtAuthenticationConverter interface {
+	// Convert transforms a validated Jwt into an authenticated JwtAuthenticationToken.
 	Convert(token *Jwt) (*JwtAuthenticationToken, Error)
 }
 
@@ -20,6 +21,7 @@ type DefaultJwtAuthenticationConverter struct {
 	authoritiesClaims  []string
 }
 
+// New creates a new DefaultJwtAuthenticationConverter with default principal claim ("sub"), authority prefix ("SCOPE_"), and authority claim paths.
 func (this DefaultJwtAuthenticationConverter) New() *DefaultJwtAuthenticationConverter {
 	this.principalClaimName = defaultPrincipalClaimName
 	this.authorityPrefix = defaultAuthorityPrefix
@@ -27,25 +29,30 @@ func (this DefaultJwtAuthenticationConverter) New() *DefaultJwtAuthenticationCon
 	return &this
 }
 
+// NewDefaultJwtAuthenticationConverter creates a new DefaultJwtAuthenticationConverter.
 func NewDefaultJwtAuthenticationConverter() *DefaultJwtAuthenticationConverter {
 	return DefaultJwtAuthenticationConverter{}.New()
 }
 
+// WithPrincipalClaimName sets the JWT claim name used to extract the principal name.
 func (this *DefaultJwtAuthenticationConverter) WithPrincipalClaimName(name string) *DefaultJwtAuthenticationConverter {
 	this.principalClaimName = name
 	return this
 }
 
+// WithAuthorityPrefix sets the prefix prepended to extracted authorities.
 func (this *DefaultJwtAuthenticationConverter) WithAuthorityPrefix(prefix string) *DefaultJwtAuthenticationConverter {
 	this.authorityPrefix = prefix
 	return this
 }
 
+// WithAuthoritiesClaims sets the claim names or dot-separated claim paths inspected to extract granted authorities.
 func (this *DefaultJwtAuthenticationConverter) WithAuthoritiesClaims(claims ...string) *DefaultJwtAuthenticationConverter {
 	this.authoritiesClaims = claims
 	return this
 }
 
+// getClaimValue retrieves a top-level or dot-separated nested claim value from a claims map.
 func getClaimValue(claims map[string]any, path string) (any, bool) {
 	if val, ok := claims[path]; ok {
 		return val, true
@@ -68,6 +75,7 @@ func getClaimValue(claims map[string]any, path string) (any, bool) {
 	return nil, false
 }
 
+// Convert extracts granted authorities and the principal name from the given Jwt and returns an authenticated JwtAuthenticationToken.
 func (this *DefaultJwtAuthenticationConverter) Convert(token *Jwt) (*JwtAuthenticationToken, Error) {
 	authorities := make([]GrantedAuthority, 0)
 

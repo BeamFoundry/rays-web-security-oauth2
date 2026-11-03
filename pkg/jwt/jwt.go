@@ -19,6 +19,7 @@ type Jwt struct {
 	TokenValue string         `json:"token_value"`
 }
 
+// New creates a new Jwt instance with the specified token string, timestamps, headers, and claims.
 func (this Jwt) New(tokenValue string, issuedAt, expiresAt time.Time, headers, claims map[string]any) *Jwt {
 	this.TokenValue = tokenValue
 	this.IssuedAt = issuedAt
@@ -28,10 +29,12 @@ func (this Jwt) New(tokenValue string, issuedAt, expiresAt time.Time, headers, c
 	return &this
 }
 
+// NewJwt creates a new Jwt instance.
 func NewJwt(tokenValue string, issuedAt, expiresAt time.Time, headers, claims map[string]any) *Jwt {
 	return Jwt{}.New(tokenValue, issuedAt, expiresAt, headers, claims)
 }
 
+// Subject returns the "sub" (subject) claim value, or an empty string if not present.
 func (this *Jwt) Subject() string {
 	if s, ok := this.Claims["sub"].(string); ok {
 		return s
@@ -39,6 +42,7 @@ func (this *Jwt) Subject() string {
 	return ""
 }
 
+// Issuer returns the "iss" (issuer) claim value, or an empty string if not present.
 func (this *Jwt) Issuer() string {
 	if s, ok := this.Claims["iss"].(string); ok {
 		return s
@@ -46,6 +50,7 @@ func (this *Jwt) Issuer() string {
 	return ""
 }
 
+// Audience returns the "aud" (audience) claim values as a slice of strings, or nil if not present.
 func (this *Jwt) Audience() []string {
 	if aud, ok := this.Claims["aud"]; ok {
 		switch v := aud.(type) {
@@ -66,6 +71,7 @@ func (this *Jwt) Audience() []string {
 	return nil
 }
 
+// KeyID returns the "kid" (key ID) header value, or an empty string if not present.
 func (this *Jwt) KeyID() string {
 	if kid, ok := this.Headers["kid"].(string); ok {
 		return kid
@@ -75,6 +81,7 @@ func (this *Jwt) KeyID() string {
 
 // JwtDecoder decodes and verifies a JWT token string
 type JwtDecoder interface {
+	// Decode parses, cryptographically verifies, and validates a compact JWT string.
 	Decode(token string) (*Jwt, Error)
 }
 
@@ -90,11 +97,13 @@ type JwtClaimsSet struct {
 	Audience  []string       `json:"aud,omitempty"`
 }
 
+// New creates an initialized JwtClaimsSet with an empty custom Claims map.
 func (this JwtClaimsSet) New() *JwtClaimsSet {
 	this.Claims = make(map[string]any)
 	return &this
 }
 
+// NewJwtClaimsSet creates a new initialized JwtClaimsSet.
 func NewJwtClaimsSet() *JwtClaimsSet {
 	return JwtClaimsSet{}.New()
 }
@@ -107,6 +116,7 @@ type JwtEncoderParameters struct {
 
 // JwtEncoder signs and encodes a JWT
 type JwtEncoder interface {
+	// Encode serializes and cryptographically signs the provided JWT headers and claims.
 	Encode(parameters *JwtEncoderParameters) (*Jwt, Error)
 }
 

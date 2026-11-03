@@ -10,7 +10,9 @@ import (
 // OAuth2AuthenticatedPrincipal represents an authenticated OAuth2 principal
 type OAuth2AuthenticatedPrincipal interface {
 	Principal
+	// GetAttributes returns the claims or attributes associated with the principal.
 	GetAttributes() map[string]any
+	// GetAuthorities returns the granted authorities assigned to the principal.
 	GetAuthorities() []GrantedAuthority
 }
 
@@ -26,6 +28,7 @@ type DefaultOAuth2User struct {
 	Authorities      []GrantedAuthority `json:"authorities"`
 }
 
+// New creates a new DefaultOAuth2User with the given authorities, attributes, and name attribute key (defaulting to "sub").
 func (this DefaultOAuth2User) New(
 	authorities []GrantedAuthority,
 	attributes map[string]any,
@@ -40,6 +43,7 @@ func (this DefaultOAuth2User) New(
 	return &this
 }
 
+// NewDefaultOAuth2User creates a new DefaultOAuth2User.
 func NewDefaultOAuth2User(
 	authorities []GrantedAuthority,
 	attributes map[string]any,
@@ -48,6 +52,7 @@ func NewDefaultOAuth2User(
 	return DefaultOAuth2User{}.New(authorities, attributes, nameAttributeKey)
 }
 
+// GetName returns the user's principal name looked up via NameAttributeKey in Attributes.
 func (this *DefaultOAuth2User) GetName() string {
 	if val, ok := this.Attributes[this.NameAttributeKey]; ok {
 		if s, ok := val.(string); ok {
@@ -57,10 +62,12 @@ func (this *DefaultOAuth2User) GetName() string {
 	return ""
 }
 
+// GetAttributes returns the user's attributes map.
 func (this *DefaultOAuth2User) GetAttributes() map[string]any {
 	return this.Attributes
 }
 
+// GetAuthorities returns the authorities granted to the user.
 func (this *DefaultOAuth2User) GetAuthorities() []GrantedAuthority {
 	return this.Authorities
 }
@@ -79,7 +86,9 @@ type OidcUserInfo struct {
 // OidcUser represents an authenticated OpenID Connect 1.0 user
 type OidcUser interface {
 	OAuth2User
+	// GetIdToken returns the OpenID Connect ID Token associated with the user.
 	GetIdToken() *OidcIdToken
+	// GetUserInfo returns the OpenID Connect UserInfo claims associated with the user, if available.
 	GetUserInfo() *OidcUserInfo
 }
 
@@ -90,6 +99,7 @@ type DefaultOidcUser struct {
 	DefaultOAuth2User
 }
 
+// New creates a new DefaultOidcUser merging claims from the ID token and optional UserInfo response.
 func (this DefaultOidcUser) New(
 	authorities []GrantedAuthority,
 	idToken *OidcIdToken,
@@ -118,6 +128,7 @@ func (this DefaultOidcUser) New(
 	return &this
 }
 
+// NewDefaultOidcUser creates a new DefaultOidcUser.
 func NewDefaultOidcUser(
 	authorities []GrantedAuthority,
 	idToken *OidcIdToken,
@@ -127,10 +138,12 @@ func NewDefaultOidcUser(
 	return DefaultOidcUser{}.New(authorities, idToken, userInfo, nameAttributeKey)
 }
 
+// GetIdToken returns the user's OidcIdToken.
 func (this *DefaultOidcUser) GetIdToken() *OidcIdToken {
 	return this.IdToken
 }
 
+// GetUserInfo returns the user's OidcUserInfo.
 func (this *DefaultOidcUser) GetUserInfo() *OidcUserInfo {
 	return this.UserInfo
 }
@@ -144,6 +157,7 @@ type DefaultOAuth2AuthenticatedPrincipal struct {
 
 var _ OAuth2AuthenticatedPrincipal = &DefaultOAuth2AuthenticatedPrincipal{}
 
+// New creates a new DefaultOAuth2AuthenticatedPrincipal with the given principal name, attributes, and authorities.
 func (this DefaultOAuth2AuthenticatedPrincipal) New(
 	name string,
 	attributes map[string]any,
@@ -155,6 +169,7 @@ func (this DefaultOAuth2AuthenticatedPrincipal) New(
 	return &this
 }
 
+// NewDefaultOAuth2AuthenticatedPrincipal creates a new DefaultOAuth2AuthenticatedPrincipal.
 func NewDefaultOAuth2AuthenticatedPrincipal(
 	name string,
 	attributes map[string]any,
@@ -163,18 +178,22 @@ func NewDefaultOAuth2AuthenticatedPrincipal(
 	return DefaultOAuth2AuthenticatedPrincipal{}.New(name, attributes, authorities)
 }
 
+// GetName returns the authenticated principal's name.
 func (this *DefaultOAuth2AuthenticatedPrincipal) GetName() string {
 	return this.Name
 }
 
+// GetAttributes returns the attributes associated with the authenticated principal.
 func (this *DefaultOAuth2AuthenticatedPrincipal) GetAttributes() map[string]any {
 	return this.Attributes
 }
 
+// GetAuthorities returns the authorities granted to the authenticated principal.
 func (this *DefaultOAuth2AuthenticatedPrincipal) GetAuthorities() []GrantedAuthority {
 	return this.Authorities
 }
 
+// init registers DefaultOAuth2AuthenticatedPrincipal with encoding/gob.
 func init() {
 	gob.Register(&DefaultOAuth2AuthenticatedPrincipal{})
 }

@@ -1,3 +1,4 @@
+// Package server_test contains unit and fuzz tests for the OAuth 2.1 authorization server.
 package server_test
 
 import (
@@ -23,30 +24,44 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestServer runs the Ginkgo test suite for the OAuth2 authorization server package.
 func TestServer(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 Authorization Server Suite")
 }
 
+// mockSecurityContext is an in-memory test double for SecurityContext.
 type mockSecurityContext struct {
 	auth  Authentication
 	debug string
 }
 
-func (this *mockSecurityContext) GetAuthentication() Authentication    { return this.auth }
-func (this *mockSecurityContext) SetAuthentication(a Authentication)   { this.auth = a }
-func (this *mockSecurityContext) SetHTTPPolicyDebugValue(debug string) { this.debug = debug }
-func (this *mockSecurityContext) GetHTTPPolicyDebugValue() string      { return this.debug }
+// GetAuthentication returns the stored Authentication.
+func (this *mockSecurityContext) GetAuthentication() Authentication { return this.auth }
 
+// SetAuthentication sets the current Authentication in the context.
+func (this *mockSecurityContext) SetAuthentication(a Authentication) { this.auth = a }
+
+// SetHTTPPolicyDebugValue sets the HTTP policy debug string.
+func (this *mockSecurityContext) SetHTTPPolicyDebugValue(debug string) { this.debug = debug }
+
+// GetHTTPPolicyDebugValue returns the HTTP policy debug string.
+func (this *mockSecurityContext) GetHTTPPolicyDebugValue() string { return this.debug }
+
+// mockSecurityContextHolder is an in-memory test double for SecurityContextHolder.
 type mockSecurityContextHolder struct {
 	ctx SecurityContext
 }
 
+// ClearContext resets the stored SecurityContext to nil.
 func (this *mockSecurityContextHolder) ClearContext() { this.ctx = nil }
+
+// SetContext stores the given SecurityContext.
 func (this *mockSecurityContextHolder) SetContext(sc SecurityContext) {
 	this.ctx = sc
 }
 
+// GetContext returns the current SecurityContext, lazily initializing one if nil.
 func (this *mockSecurityContextHolder) GetContext() SecurityContext {
 	if this.ctx == nil {
 		this.ctx = &mockSecurityContext{}
@@ -1209,21 +1224,27 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 	})
 })
 
+// testMockFailingJWKSource is a JWKSource test double that always returns errors.
 type testMockFailingJWKSource struct{}
 
+// GetJWKSet returns a simulated JWKSet retrieval error.
 func (this *testMockFailingJWKSource) GetJWKSet() (*JWKSet, Error) {
 	return nil, NewError("JWKSetError", "failed to get jwk set")
 }
 
+// GetSigningKey returns a simulated missing signing key error.
+//
 //nolint:revive // JWKSource interface requires 4 return values
 func (this *testMockFailingJWKSource) GetSigningKey() (kid string, privKey any, alg string, err Error) {
 	return "", nil, "", NewError("NoSigningKey", "no key")
 }
 
+// GetVerificationKey returns a simulated missing verification key error.
 func (this *testMockFailingJWKSource) GetVerificationKey(_ string) (pubKey any, alg string, err Error) {
 	return nil, "", NewError("NoVerificationKey", "no key")
 }
 
+// testMockFailingAuthorizationService wraps an OAuth2AuthorizationService to simulate storage failures on specific operations.
 type testMockFailingAuthorizationService struct {
 	OAuth2AuthorizationService
 	failSave        bool
@@ -1231,6 +1252,7 @@ type testMockFailingAuthorizationService struct {
 	failRemove      bool
 }
 
+// Save returns a simulated storage error if failSave is true, or delegates to the embedded service.
 func (this *testMockFailingAuthorizationService) Save(auth *OAuth2Authorization) Error {
 	if this.failSave {
 		return NewError("StorageError", "database write failure")
@@ -1238,6 +1260,7 @@ func (this *testMockFailingAuthorizationService) Save(auth *OAuth2Authorization)
 	return this.OAuth2AuthorizationService.Save(auth)
 }
 
+// FindByToken returns a simulated storage error if failFindByToken is true, or delegates to the embedded service.
 func (this *testMockFailingAuthorizationService) FindByToken(token, tokenType string) (*OAuth2Authorization, Error) {
 	if this.failFindByToken {
 		return nil, NewError("StorageError", "database lookup failure")
@@ -1245,6 +1268,7 @@ func (this *testMockFailingAuthorizationService) FindByToken(token, tokenType st
 	return this.OAuth2AuthorizationService.FindByToken(token, tokenType)
 }
 
+// Remove returns a simulated storage error if failRemove is true, or delegates to the embedded service.
 func (this *testMockFailingAuthorizationService) Remove(auth *OAuth2Authorization) Error {
 	if this.failRemove {
 		return NewError("StorageError", "database delete failure")

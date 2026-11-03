@@ -1,3 +1,4 @@
+// Package config_test contains unit tests for the OAuth 2.0 HttpSecurityBuilder configurers DSL.
 package config_test
 
 import (
@@ -18,26 +19,35 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestConfig runs the Ginkgo test suite for the OAuth2 config package.
 func TestConfig(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 Config Suite")
 }
 
+// mockAuthManager is a test double for AuthenticationManager that returns the input Authentication unchanged.
 type mockAuthManager struct {
 	Manager
 }
 
+// Authenticate returns the supplied Authentication without error.
 func (this *mockAuthManager) Authenticate(a Authentication) (Authentication, AuthenticationException) {
 	return a, nil
 }
 
+// mockSecurityContextHolder is an in-memory test double for SecurityContextHolder.
 type mockSecurityContextHolder struct {
 	ctx SecurityContext
 }
 
-func (this *mockSecurityContextHolder) ClearContext()                 { this.ctx = nil }
+// ClearContext resets the stored SecurityContext to nil.
+func (this *mockSecurityContextHolder) ClearContext() { this.ctx = nil }
+
+// SetContext stores the given SecurityContext.
 func (this *mockSecurityContextHolder) SetContext(sc SecurityContext) { this.ctx = sc }
-func (this *mockSecurityContextHolder) GetContext() SecurityContext   { return this.ctx }
+
+// GetContext returns the currently stored SecurityContext.
+func (this *mockSecurityContextHolder) GetContext() SecurityContext { return this.ctx }
 
 var _ = Describe("OAuth2 Configurers DSL", func() {
 	var (

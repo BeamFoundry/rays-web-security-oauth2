@@ -64,24 +64,29 @@ func (this JwxJwtDecoder) NewWithRemoteJWKS(jwksURI string) *JwxJwtDecoder {
 	return &this
 }
 
+// NewJwxJwtDecoderWithKeySet creates a JwxJwtDecoder that verifies tokens against a static JWK Set.
 func NewJwxJwtDecoderWithKeySet(set jwk.Set) *JwxJwtDecoder {
 	return JwxJwtDecoder{}.NewWithKeySet(set)
 }
 
+// NewJwxJwtDecoderWithRemoteJWKS creates a JwxJwtDecoder that fetches and caches verification keys from a remote JWKS URI.
 func NewJwxJwtDecoderWithRemoteJWKS(jwksURI string) *JwxJwtDecoder {
 	return JwxJwtDecoder{}.NewWithRemoteJWKS(jwksURI)
 }
 
+// WithIssuer configures the expected "iss" (issuer) claim for token validation.
 func (this *JwxJwtDecoder) WithIssuer(issuer string) *JwxJwtDecoder {
 	this.issuer = issuer
 	return this
 }
 
+// WithAudience configures the expected "aud" (audience) claim for token validation.
 func (this *JwxJwtDecoder) WithAudience(aud string) *JwxJwtDecoder {
 	this.audience = aud
 	return this
 }
 
+// WithClockSkew configures the acceptable clock skew duration for temporal claim validation.
 func (this *JwxJwtDecoder) WithClockSkew(skew time.Duration) *JwxJwtDecoder {
 	this.clockSkew = skew
 	return this
@@ -199,10 +204,12 @@ func (this JwxJwtEncoder) New(signKey any, alg jwa.SignatureAlgorithm, keyID str
 	return &this
 }
 
+// NewJwxJwtEncoder creates a new JwxJwtEncoder for the given signing key, signature algorithm, and key ID.
 func NewJwxJwtEncoder(signKey any, alg jwa.SignatureAlgorithm, keyID string) *JwxJwtEncoder {
 	return JwxJwtEncoder{}.New(signKey, alg, keyID)
 }
 
+// Encode builds and signs a JWT token from the provided JwtEncoderParameters.
 func (this *JwxJwtEncoder) Encode(params *JwtEncoderParameters) (*Jwt, Error) {
 	builder := jwt.NewBuilder()
 

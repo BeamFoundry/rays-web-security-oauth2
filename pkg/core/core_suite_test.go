@@ -1,3 +1,4 @@
+// Package core_test contains unit tests for the core OAuth 2.0 and OpenID Connect domain models.
 package core_test
 
 import (
@@ -11,6 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestCore runs the Ginkgo test suite for the OAuth2 core package.
 func TestCore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 Core Suite")

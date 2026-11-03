@@ -7,6 +7,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 )
 
+// FuzzParseUnverified fuzzes ParseUnverified with arbitrary token strings to ensure it never panics.
 func FuzzParseUnverified(f *testing.F) {
 	// Seed corpus with various tokens
 	f.Add("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
@@ -28,6 +29,7 @@ func FuzzParseUnverified(f *testing.F) {
 	})
 }
 
+// FuzzNimbusJwtDecoder fuzzes NimbusJwtDecoder.Decode with arbitrary token strings to ensure it never panics.
 func FuzzNimbusJwtDecoder(f *testing.F) {
 	km, err := RSAKeyManager{}.New(2048, "fuzz-key")
 	if err != nil {

@@ -23,16 +23,19 @@ var (
 	_    Error
 )
 
+// New creates a new OpaqueTokenAuthenticationProvider with the given OpaqueTokenIntrospector and a DefaultOpaqueTokenAuthenticationConverter.
 func (this OpaqueTokenAuthenticationProvider) New(introspector OpaqueTokenIntrospector) *OpaqueTokenAuthenticationProvider {
 	this.introspector = introspector
 	this.converter = DefaultOpaqueTokenAuthenticationConverter{}.New()
 	return &this
 }
 
+// NewOpaqueTokenAuthenticationProvider creates a new OpaqueTokenAuthenticationProvider.
 func NewOpaqueTokenAuthenticationProvider(introspector OpaqueTokenIntrospector) *OpaqueTokenAuthenticationProvider {
 	return OpaqueTokenAuthenticationProvider{}.New(introspector)
 }
 
+// PostConstruct initializes injected OpaqueTokenIntrospector and OpaqueTokenAuthenticationConverter dependencies.
 func (this *OpaqueTokenAuthenticationProvider) PostConstruct() Error {
 	if intro, ok := this.injectedIntrospector.Get(); ok {
 		this.introspector = intro
@@ -45,21 +48,25 @@ func (this *OpaqueTokenAuthenticationProvider) PostConstruct() Error {
 	return nil
 }
 
+// WithConverter sets the OpaqueTokenAuthenticationConverter used to convert introspected principals into Authentication tokens.
 func (this *OpaqueTokenAuthenticationProvider) WithConverter(c OpaqueTokenAuthenticationConverter) *OpaqueTokenAuthenticationProvider {
 	this.converter = c
 	return this
 }
 
+// WithIntrospector sets the OpaqueTokenIntrospector used to validate opaque bearer tokens.
 func (this *OpaqueTokenAuthenticationProvider) WithIntrospector(introspector OpaqueTokenIntrospector) *OpaqueTokenAuthenticationProvider {
 	this.introspector = introspector
 	return this
 }
 
+// Supports reports whether the given Authentication is a BearerTokenAuthenticationToken.
 func (this *OpaqueTokenAuthenticationProvider) Supports(auth Authentication) bool {
 	_, ok := auth.(*BearerTokenAuthenticationToken)
 	return ok
 }
 
+// Authenticate introspects the opaque bearer token and converts the active principal into an authenticated Authentication.
 func (this *OpaqueTokenAuthenticationProvider) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
 	bearerToken, ok := auth.(*BearerTokenAuthenticationToken)
 	if !ok {

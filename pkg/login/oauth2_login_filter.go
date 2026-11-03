@@ -57,6 +57,7 @@ var _ SecurityEndpointRegistration = &OAuth2LoginAuthenticationFilter{}
 
 var _ BeamPostConstructWithContext = &OAuth2LoginAuthenticationFilter{}
 
+// New creates a new OAuth2LoginAuthenticationFilter with default endpoints and a session-backed AuthorizationRequestRepository.
 func (this OAuth2LoginAuthenticationFilter) New(
 	clientRepo ClientRegistrationRepository,
 	authManager AuthenticationManager,
@@ -72,6 +73,7 @@ func (this OAuth2LoginAuthenticationFilter) New(
 	return &this
 }
 
+// NewOAuth2LoginAuthenticationFilter creates a new OAuth2LoginAuthenticationFilter.
 func NewOAuth2LoginAuthenticationFilter(
 	clientRepo ClientRegistrationRepository,
 	authManager AuthenticationManager,
@@ -80,26 +82,31 @@ func NewOAuth2LoginAuthenticationFilter(
 	return OAuth2LoginAuthenticationFilter{}.New(clientRepo, authManager, contextHolder)
 }
 
+// WithDefaultRegistrationID sets the default OAuth 2.0 client registration ID used when initiating login redirects.
 func (this *OAuth2LoginAuthenticationFilter) WithDefaultRegistrationID(id string) *OAuth2LoginAuthenticationFilter {
 	this.defaultRegistrationID = id
 	return this
 }
 
+// WithDefaultSuccessURL sets the default URL to redirect to after successful authentication.
 func (this *OAuth2LoginAuthenticationFilter) WithDefaultSuccessURL(url string) *OAuth2LoginAuthenticationFilter {
 	this.defaultSuccessURL = url
 	return this
 }
 
+// WithBaseURL sets the external base URL used to resolve relative redirect URIs.
 func (this *OAuth2LoginAuthenticationFilter) WithBaseURL(url string) *OAuth2LoginAuthenticationFilter {
 	this.baseURL = url
 	return this
 }
 
+// WithTrustedProxy enables or disables trusting X-Forwarded-* headers when resolving redirect URIs.
 func (this *OAuth2LoginAuthenticationFilter) WithTrustedProxy(trusted bool) *OAuth2LoginAuthenticationFilter {
 	this.trustedProxy = trusted
 	return this
 }
 
+// Config returns the effective OAuth2LoginConfig for this filter.
 func (this *OAuth2LoginAuthenticationFilter) Config() *OAuth2LoginConfig {
 	if this.config == nil {
 		this.config = &OAuth2LoginConfig{
@@ -302,6 +309,7 @@ func (this *OAuth2LoginAuthenticationFilter) Authenticate(handler SecurityHandle
 	return (&DefaultSecurityFilterChainException{}).RedirectTo(targetURL)
 }
 
+// isValidRedirectTarget reports whether path is a safe relative path starting with a single slash.
 func isValidRedirectTarget(path string) bool {
 	if !strings.HasPrefix(path, "/") {
 		return false

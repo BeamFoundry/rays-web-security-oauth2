@@ -16,9 +16,12 @@ import (
 )
 
 const (
+	// sessionAuthRequestKey is the default HTTP session attribute key used to store pending OAuth2AuthorizationRequest instances.
 	sessionAuthRequestKey = "oauth2_authorization_request"
-	schemeHTTP            = "http"
-	schemeHTTPS           = "https"
+	// schemeHTTP is the standard unencrypted HTTP URI scheme.
+	schemeHTTP = "http"
+	// schemeHTTPS is the standard TLS-encrypted HTTPS URI scheme.
+	schemeHTTPS = "https"
 )
 
 // AuthorizationRequestConfig holds options for GenerateAuthorizationRequest
@@ -44,6 +47,7 @@ func WithTrustedProxy(trusted bool) AuthorizationRequestOption {
 	}
 }
 
+// isHostChar reports whether rune c is a valid DNS hostname label character at position idx of a label of given length.
 func isHostChar(c rune, idx, length int) bool {
 	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
 		return true
@@ -51,6 +55,7 @@ func isHostChar(c rune, idx, length int) bool {
 	return c == '-' && idx > 0 && idx < length-1
 }
 
+// isValidHost validates that h is a well-formed hostname or IP address with an optional valid port.
 func isValidHost(h string) bool {
 	if h == "" || len(h) > 255 {
 		return false
@@ -85,6 +90,7 @@ func isValidHost(h string) bool {
 	return true
 }
 
+// resolveForwardedHeaders extracts and validates scheme and host from X-Forwarded-Proto, X-Forwarded-Host, and X-Forwarded-Port headers.
 func resolveForwardedHeaders(handler SecurityHandler, defaultScheme, defaultHost string) (scheme, host string) {
 	scheme = defaultScheme
 	host = defaultHost
@@ -120,22 +126,28 @@ func resolveForwardedHeaders(handler SecurityHandler, defaultScheme, defaultHost
 
 // AuthorizationRequestRepository manages persisting authorization requests between the redirect and callback
 type AuthorizationRequestRepository interface {
+	// LoadAuthorizationRequest retrieves the OAuth2AuthorizationRequest associated with the current request, or nil if none exists.
 	LoadAuthorizationRequest(handler SecurityHandler) *OAuth2AuthorizationRequest
+	// SaveAuthorizationRequest persists the OAuth2AuthorizationRequest for the current request context.
 	SaveAuthorizationRequest(authRequest *OAuth2AuthorizationRequest, handler SecurityHandler)
+	// RemoveAuthorizationRequest removes and returns the persisted OAuth2AuthorizationRequest for the current request context.
 	RemoveAuthorizationRequest(handler SecurityHandler) *OAuth2AuthorizationRequest
 }
 
 // SessionAuthorizationRequestRepository persists the request in the user session
 type SessionAuthorizationRequestRepository struct{}
 
+// New creates a new SessionAuthorizationRequestRepository.
 func (this SessionAuthorizationRequestRepository) New() *SessionAuthorizationRequestRepository {
 	return &this
 }
 
+// NewSessionAuthorizationRequestRepository creates a new SessionAuthorizationRequestRepository.
 func NewSessionAuthorizationRequestRepository() *SessionAuthorizationRequestRepository {
 	return SessionAuthorizationRequestRepository{}.New()
 }
 
+// LoadAuthorizationRequest retrieves the OAuth2AuthorizationRequest from the HTTP session.
 func (this *SessionAuthorizationRequestRepository) LoadAuthorizationRequest(handler SecurityHandler) *OAuth2AuthorizationRequest {
 	val := handler.SessionValue(sessionAuthRequestKey)
 	if req, ok := val.(*OAuth2AuthorizationRequest); ok {
@@ -144,10 +156,12 @@ func (this *SessionAuthorizationRequestRepository) LoadAuthorizationRequest(hand
 	return nil
 }
 
+// SaveAuthorizationRequest stores the OAuth2AuthorizationRequest in the HTTP session.
 func (this *SessionAuthorizationRequestRepository) SaveAuthorizationRequest(authRequest *OAuth2AuthorizationRequest, handler SecurityHandler) {
 	handler.SetSessionValue(sessionAuthRequestKey, authRequest)
 }
 
+// RemoveAuthorizationRequest retrieves and deletes the OAuth2AuthorizationRequest from the HTTP session.
 func (this *SessionAuthorizationRequestRepository) RemoveAuthorizationRequest(handler SecurityHandler) *OAuth2AuthorizationRequest {
 	req := this.LoadAuthorizationRequest(handler)
 	handler.SetSessionValue(sessionAuthRequestKey, nil)

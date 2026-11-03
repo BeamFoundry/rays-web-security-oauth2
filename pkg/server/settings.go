@@ -12,6 +12,7 @@ type AuthorizationServerSettings struct {
 	UserInfoEndpoint           string `json:"user_info_endpoint"`
 }
 
+// New creates a new AuthorizationServerSettings initialized with the given issuer URI and standard OAuth 2.0 endpoint paths.
 func (this AuthorizationServerSettings) New(issuer string) *AuthorizationServerSettings {
 	this.Issuer = issuer
 	this.AuthorizationEndpoint = "/oauth2/authorize"
@@ -24,10 +25,12 @@ func (this AuthorizationServerSettings) New(issuer string) *AuthorizationServerS
 	return &this
 }
 
+// NewDefault creates a new AuthorizationServerSettings with default endpoint paths for the given issuer URI.
 func (this AuthorizationServerSettings) NewDefault(issuer string) *AuthorizationServerSettings {
 	return this.New(issuer)
 }
 
+// NewDefaultAuthorizationServerSettings creates a new AuthorizationServerSettings with default endpoint paths for the given issuer URI.
 func NewDefaultAuthorizationServerSettings(issuer string) *AuthorizationServerSettings {
 	return AuthorizationServerSettings{}.NewDefault(issuer)
 }

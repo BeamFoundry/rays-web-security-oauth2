@@ -25,8 +25,11 @@ type RegisteredClient struct {
 
 // RegisteredClientRepository is the registry of registered clients
 type RegisteredClientRepository interface {
+	// FindByID retrieves a RegisteredClient by its internal registration identifier.
 	FindByID(id string) (*RegisteredClient, Error)
+	// FindByClientID retrieves a RegisteredClient by its OAuth 2.0 client_id.
 	FindByClientID(clientID string) (*RegisteredClient, Error)
+	// Save persists or updates a RegisteredClient in the repository.
 	Save(client *RegisteredClient) Error
 }
 
@@ -37,6 +40,7 @@ type InMemoryRegisteredClientRepository struct {
 	byClientID map[string]*RegisteredClient
 }
 
+// New creates a new thread-safe InMemoryRegisteredClientRepository populated with the given clients.
 func (this InMemoryRegisteredClientRepository) New(clients ...*RegisteredClient) *InMemoryRegisteredClientRepository {
 	this.mu = &sync.RWMutex{}
 	this.byID = make(map[string]*RegisteredClient)
@@ -50,10 +54,12 @@ func (this InMemoryRegisteredClientRepository) New(clients ...*RegisteredClient)
 	return repo
 }
 
+// NewInMemoryRegisteredClientRepository creates a new InMemoryRegisteredClientRepository populated with the given clients.
 func NewInMemoryRegisteredClientRepository(clients ...*RegisteredClient) *InMemoryRegisteredClientRepository {
 	return InMemoryRegisteredClientRepository{}.New(clients...)
 }
 
+// FindByID retrieves a RegisteredClient by its internal ID from memory.
 func (this *InMemoryRegisteredClientRepository) FindByID(id string) (*RegisteredClient, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
@@ -65,6 +71,7 @@ func (this *InMemoryRegisteredClientRepository) FindByID(id string) (*Registered
 	return client, nil
 }
 
+// FindByClientID retrieves a RegisteredClient by its OAuth 2.0 client_id from memory.
 func (this *InMemoryRegisteredClientRepository) FindByClientID(clientID string) (*RegisteredClient, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
@@ -76,6 +83,7 @@ func (this *InMemoryRegisteredClientRepository) FindByClientID(clientID string) 
 	return client, nil
 }
 
+// Save stores or updates a RegisteredClient in memory indexed by both ID and ClientID.
 func (this *InMemoryRegisteredClientRepository) Save(client *RegisteredClient) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()

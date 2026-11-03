@@ -21,6 +21,7 @@ import (
 
 // OpaqueTokenIntrospector validates an OAuth 2.0 token against an RFC 7662 introspection endpoint
 type OpaqueTokenIntrospector interface {
+	// Introspect validates the opaque token and returns the resulting OAuth2AuthenticatedPrincipal if active.
 	Introspect(token string) (OAuth2AuthenticatedPrincipal, Error)
 }
 
@@ -42,6 +43,7 @@ type DefaultOpaqueTokenIntrospector = NimbusOpaqueTokenIntrospector
 
 var _ OpaqueTokenIntrospector = &NimbusOpaqueTokenIntrospector{}
 
+// New creates a new NimbusOpaqueTokenIntrospector for the given RFC 7662 introspection endpoint URI and client credentials.
 func (this NimbusOpaqueTokenIntrospector) New(
 	introspectionURI string,
 	clientID string,
@@ -59,6 +61,7 @@ func (this NimbusOpaqueTokenIntrospector) New(
 	return &this
 }
 
+// NewNimbusOpaqueTokenIntrospector creates a new NimbusOpaqueTokenIntrospector.
 func NewNimbusOpaqueTokenIntrospector(
 	introspectionURI string,
 	clientID string,
@@ -67,6 +70,7 @@ func NewNimbusOpaqueTokenIntrospector(
 	return NimbusOpaqueTokenIntrospector{}.New(introspectionURI, clientID, clientSecret)
 }
 
+// NewDefaultOpaqueTokenIntrospector creates a new NimbusOpaqueTokenIntrospector.
 func NewDefaultOpaqueTokenIntrospector(
 	introspectionURI string,
 	clientID string,
@@ -75,6 +79,7 @@ func NewDefaultOpaqueTokenIntrospector(
 	return NimbusOpaqueTokenIntrospector{}.New(introspectionURI, clientID, clientSecret)
 }
 
+// WithHTTPClient configures a custom HTTP client for introspection requests.
 func (this *NimbusOpaqueTokenIntrospector) WithHTTPClient(client *http.Client) *NimbusOpaqueTokenIntrospector {
 	if client != nil {
 		this.httpClient = client
@@ -82,31 +87,37 @@ func (this *NimbusOpaqueTokenIntrospector) WithHTTPClient(client *http.Client) *
 	return this
 }
 
+// WithAuthorityPrefix sets the prefix prepended to authorities extracted from the introspection response.
 func (this *NimbusOpaqueTokenIntrospector) WithAuthorityPrefix(prefix string) *NimbusOpaqueTokenIntrospector {
 	this.authorityPrefix = prefix
 	return this
 }
 
+// WithAuthoritiesClaims sets the claim names inspected to extract granted authorities from the introspection response.
 func (this *NimbusOpaqueTokenIntrospector) WithAuthoritiesClaims(claims ...string) *NimbusOpaqueTokenIntrospector {
 	this.authoritiesClaims = claims
 	return this
 }
 
+// WithPrincipalClaimName sets the claim name used to determine the principal name from the introspection response.
 func (this *NimbusOpaqueTokenIntrospector) WithPrincipalClaimName(name string) *NimbusOpaqueTokenIntrospector {
 	this.principalClaimName = name
 	return this
 }
 
+// WithClockSkew sets the acceptable clock skew duration when validating "exp" and "nbf" timestamps.
 func (this *NimbusOpaqueTokenIntrospector) WithClockSkew(skew time.Duration) *NimbusOpaqueTokenIntrospector {
 	this.clockSkew = skew
 	return this
 }
 
+// WithTimeout sets the HTTP request timeout for token introspection calls.
 func (this *NimbusOpaqueTokenIntrospector) WithTimeout(timeout time.Duration) *NimbusOpaqueTokenIntrospector {
 	this.timeout = timeout
 	return this
 }
 
+// Introspect performs an RFC 7662 token introspection request, validates token activity and temporal claims, and constructs an OAuth2AuthenticatedPrincipal.
 func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2AuthenticatedPrincipal, Error) {
 	if this.introspectionURI == "" {
 		return nil, NewError("InvalidConfigurationError", "introspectionURI must not be empty")
@@ -332,6 +343,7 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	return NewDefaultOAuth2AuthenticatedPrincipal(principalName, claims, authorities), nil
 }
 
+// validateIntrospectionURI ensures the introspection URI uses HTTPS, or HTTP only for loopback addresses.
 func validateIntrospectionURI(rawURI string) Error {
 	parsed, err := url.Parse(rawURI)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -350,6 +362,7 @@ func validateIntrospectionURI(rawURI string) Error {
 	return NewError("IllegalArgumentException", "introspection URI must use HTTPS or HTTP for loopback")
 }
 
+// isLoopbackHost reports whether host is "localhost" or a loopback IP address.
 func isLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
@@ -358,6 +371,7 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// isSameOrigin reports whether target and configured URLs share the same scheme, hostname, and effective port.
 func isSameOrigin(target, configured *url.URL) bool {
 	if target == nil || configured == nil {
 		return false
@@ -371,6 +385,7 @@ func isSameOrigin(target, configured *url.URL) bool {
 	return effectivePort(target) == effectivePort(configured)
 }
 
+// effectivePort returns the explicit port of u or the default port for its scheme (80 for http, 443 for https).
 func effectivePort(u *url.URL) string {
 	if u == nil {
 		return ""
@@ -387,6 +402,7 @@ func effectivePort(u *url.URL) string {
 	return ""
 }
 
+// parseIntegerTimestamp converts a numeric or string claim value into a 64-bit integer Unix timestamp.
 func parseIntegerTimestamp(val any) (int64, bool) {
 	switch v := val.(type) {
 	case float64:

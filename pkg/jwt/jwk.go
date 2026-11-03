@@ -43,8 +43,11 @@ type JWKSet struct {
 
 // JWKSource provides keys for signing and verification
 type JWKSource interface {
+	// GetJWKSet returns the public JSON Web Key Set for publishing or verification.
 	GetJWKSet() (*JWKSet, Error)
+	// GetSigningKey returns the active key ID, private key, and signing algorithm.
 	GetSigningKey() (kid string, privateKey any, alg string, err Error)
+	// GetVerificationKey returns the public verification key and algorithm for the specified key ID.
 	GetVerificationKey(kid string) (publicKey any, alg string, err Error)
 }
 
@@ -56,6 +59,7 @@ type RSAKeyManager struct {
 	alg        string
 }
 
+// New generates a new RSA keypair with the specified bit size (minimum 2048) and key ID.
 func (this RSAKeyManager) New(bits int, kid string) (*RSAKeyManager, Error) {
 	if bits < 2048 {
 		bits = 2048
@@ -74,10 +78,13 @@ func (this RSAKeyManager) New(bits int, kid string) (*RSAKeyManager, Error) {
 	return &this, nil
 }
 
+// NewRSAKeyManager generates and returns a new RSAKeyManager.
 func NewRSAKeyManager(bits int, kid string) (*RSAKeyManager, Error) {
 	return RSAKeyManager{}.New(bits, kid)
 }
 
+// GetSigningKey returns the key ID, RSA private key, and signing algorithm (RS256).
+//
 //nolint:revive // JWKSource interface requires 4 return values
 func (this *RSAKeyManager) GetSigningKey() (kid string, privateKey any, alg string, err Error) {
 	this.mu.RLock()
@@ -85,6 +92,7 @@ func (this *RSAKeyManager) GetSigningKey() (kid string, privateKey any, alg stri
 	return this.kid, this.privateKey, this.alg, nil
 }
 
+// GetVerificationKey returns the RSA public key and algorithm matching the requested key ID.
 func (this *RSAKeyManager) GetVerificationKey(kid string) (publicKey any, alg string, err Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
@@ -94,6 +102,7 @@ func (this *RSAKeyManager) GetVerificationKey(kid string) (publicKey any, alg st
 	return &this.privateKey.PublicKey, this.alg, nil
 }
 
+// GetJWKSet exports the RSA public key as a JSON Web Key Set.
 func (this *RSAKeyManager) GetJWKSet() (*JWKSet, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
@@ -125,15 +134,18 @@ type DefaultJwtEncoder struct {
 	jwkSource JWKSource
 }
 
+// New creates a new DefaultJwtEncoder backed by the provided JWKSource.
 func (this DefaultJwtEncoder) New(source JWKSource) *DefaultJwtEncoder {
 	this.jwkSource = source
 	return &this
 }
 
+// NewDefaultJwtEncoder creates a new DefaultJwtEncoder backed by the provided JWKSource.
 func NewDefaultJwtEncoder(source JWKSource) *DefaultJwtEncoder {
 	return DefaultJwtEncoder{}.New(source)
 }
 
+// Encode serializes and signs the provided headers and claims using the configured JWKSource.
 func (this *DefaultJwtEncoder) Encode(params *JwtEncoderParameters) (*Jwt, Error) {
 	kid, privKey, alg, err := this.jwkSource.GetSigningKey()
 	if err != nil {
@@ -233,31 +245,37 @@ type NimbusJwtDecoder struct {
 	skew      time.Duration
 }
 
+// New creates a new NimbusJwtDecoder with a default 60-second clock skew.
 func (this NimbusJwtDecoder) New(source JWKSource) *NimbusJwtDecoder {
 	this.jwkSource = source
 	this.skew = 60 * time.Second
 	return &this
 }
 
+// NewNimbusJwtDecoder creates a new NimbusJwtDecoder backed by the provided JWKSource.
 func NewNimbusJwtDecoder(source JWKSource) *NimbusJwtDecoder {
 	return NimbusJwtDecoder{}.New(source)
 }
 
+// WithIssuer configures the expected "iss" (issuer) claim for token validation.
 func (this *NimbusJwtDecoder) WithIssuer(issuer string) *NimbusJwtDecoder {
 	this.issuer = issuer
 	return this
 }
 
+// WithAudience configures one or more expected "aud" (audience) values for token validation.
 func (this *NimbusJwtDecoder) WithAudience(aud ...string) *NimbusJwtDecoder {
 	this.audience = append(this.audience, aud...)
 	return this
 }
 
+// WithClockSkew configures the allowable clock skew duration when validating "exp" and "nbf" claims.
 func (this *NimbusJwtDecoder) WithClockSkew(skew time.Duration) *NimbusJwtDecoder {
 	this.skew = skew
 	return this
 }
 
+// Decode parses, verifies the cryptographic signature, and validates standard claims of a JWT string.
 func (this *NimbusJwtDecoder) Decode(token string) (*Jwt, Error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {

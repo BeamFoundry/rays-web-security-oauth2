@@ -15,6 +15,7 @@ type OAuth2AuthenticationToken struct {
 
 var _ Authentication = &OAuth2AuthenticationToken{}
 
+// New creates a new authenticated OAuth2AuthenticationToken for the given principal, authorities, and client registration ID.
 func (this OAuth2AuthenticationToken) New(
 	principal OAuth2User,
 	authorities []GrantedAuthority,
@@ -27,6 +28,7 @@ func (this OAuth2AuthenticationToken) New(
 	return &this
 }
 
+// NewOAuth2AuthenticationToken creates a new authenticated OAuth2AuthenticationToken.
 func NewOAuth2AuthenticationToken(
 	principal OAuth2User,
 	authorities []GrantedAuthority,
@@ -35,10 +37,12 @@ func NewOAuth2AuthenticationToken(
 	return OAuth2AuthenticationToken{}.New(principal, authorities, authorizedClientRegistrationID)
 }
 
+// GetCredentials returns the credentials associated with this token (always empty for an authenticated OAuth2 user).
 func (this *OAuth2AuthenticationToken) GetCredentials() any {
 	return ""
 }
 
+// GetName returns the name of the authenticated OAuth2User or Principal, or an empty string if unavailable.
 func (this *OAuth2AuthenticationToken) GetName() string {
 	if principal, ok := this.Principal.(OAuth2User); ok {
 		return principal.GetName()
@@ -86,6 +90,7 @@ type OAuth2LoginAuthenticationToken struct {
 
 var _ Authentication = &OAuth2LoginAuthenticationToken{}
 
+// New creates a new unauthenticated OAuth2LoginAuthenticationToken for the given client registration and authorization exchange.
 func (this OAuth2LoginAuthenticationToken) New(
 	clientReg *ClientRegistration,
 	exchange OAuth2AuthorizationExchange,
@@ -97,6 +102,7 @@ func (this OAuth2LoginAuthenticationToken) New(
 	return &this
 }
 
+// NewOAuth2LoginAuthenticationToken creates a new unauthenticated OAuth2LoginAuthenticationToken.
 func NewOAuth2LoginAuthenticationToken(
 	clientReg *ClientRegistration,
 	exchange OAuth2AuthorizationExchange,
@@ -104,6 +110,7 @@ func NewOAuth2LoginAuthenticationToken(
 	return OAuth2LoginAuthenticationToken{}.New(clientReg, exchange)
 }
 
+// GetCredentials returns the authorization code from the authorization response, or an empty string if absent.
 func (this *OAuth2LoginAuthenticationToken) GetCredentials() any {
 	if this.AuthorizationExchange.AuthorizationResponse != nil {
 		return this.AuthorizationExchange.AuthorizationResponse.Code
@@ -111,6 +118,7 @@ func (this *OAuth2LoginAuthenticationToken) GetCredentials() any {
 	return ""
 }
 
+// init registers OAuth2 authentication tokens and default user implementations with encoding/gob.
 func init() {
 	gob.Register(&OAuth2AuthenticationToken{})
 	gob.Register(&OAuth2LoginAuthenticationToken{})

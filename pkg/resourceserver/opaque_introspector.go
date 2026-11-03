@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -217,48 +218,38 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 
 	now := time.Now()
 	if expVal, exists := claims["exp"]; exists {
-		var expSec int64
-		var parsed bool
-		switch v := expVal.(type) {
-		case float64:
-			expSec = int64(v)
-			parsed = true
-		case int64:
-			expSec = v
-			parsed = true
-		case json.Number:
-			if p, parseErr := v.Int64(); parseErr == nil {
-				expSec = p
-				parsed = true
-			}
-		default:
+		expSec, ok := parseIntegerTimestamp(expVal)
+		if !ok {
+			return nil, OAuth2AuthenticationException{}.New(
+				OAuth2Error{
+					ErrorCode:        OAuth2ErrorInvalidToken,
+					ErrorDescription: "invalid exp claim",
+				},
+				nil,
+			)
 		}
-		if parsed {
-			expTime := time.Unix(expSec, 0)
-			if now.Add(-this.clockSkew).After(expTime) {
-				return nil, OAuth2AuthenticationException{}.New(
-					OAuth2Error{
-						ErrorCode:        OAuth2ErrorInvalidToken,
-						ErrorDescription: "token has expired",
-					},
-					nil,
-				)
-			}
+		expTime := time.Unix(expSec, 0)
+		if now.Add(-this.clockSkew).After(expTime) {
+			return nil, OAuth2AuthenticationException{}.New(
+				OAuth2Error{
+					ErrorCode:        OAuth2ErrorInvalidToken,
+					ErrorDescription: "token has expired",
+				},
+				nil,
+			)
 		}
 	}
 
 	if nbfVal, exists := claims["nbf"]; exists {
-		var nbfSec int64
-		switch v := nbfVal.(type) {
-		case float64:
-			nbfSec = int64(v)
-		case int64:
-			nbfSec = v
-		case json.Number:
-			if parsed, parseErr := v.Int64(); parseErr == nil {
-				nbfSec = parsed
-			}
-		default:
+		nbfSec, ok := parseIntegerTimestamp(nbfVal)
+		if !ok {
+			return nil, OAuth2AuthenticationException{}.New(
+				OAuth2Error{
+					ErrorCode:        OAuth2ErrorInvalidToken,
+					ErrorDescription: "invalid nbf claim",
+				},
+				nil,
+			)
 		}
 		if nbfSec > 0 {
 			nbfTime := time.Unix(nbfSec, 0)
@@ -305,12 +296,16 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 			case []any:
 				for _, item := range v {
 					if s, strOk := item.(string); strOk {
-						addAuth(claimKey, s)
+						for part := range strings.FieldsSeq(s) {
+							addAuth(claimKey, part)
+						}
 					}
 				}
 			case []string:
 				for _, s := range v {
-					addAuth(claimKey, s)
+					for part := range strings.FieldsSeq(s) {
+						addAuth(claimKey, part)
+					}
 				}
 			default:
 			}
@@ -389,4 +384,25 @@ func effectivePort(u *url.URL) string {
 		return "443"
 	}
 	return ""
+}
+
+func parseIntegerTimestamp(val any) (int64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case json.Number:
+		if p, parseErr := v.Int64(); parseErr == nil {
+			return p, true
+		}
+	case string:
+		if p, parseErr := strconv.ParseInt(v, 10, 64); parseErr == nil {
+			return p, true
+		}
+	default:
+	}
+	return 0, false
 }

@@ -1200,12 +1200,15 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		// Same-origin redirect succeeds
 		sameOriginServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/target" {
+				Expect(r.Method).To(Equal(http.MethodPost))
+				Expect(r.ParseForm()).To(Succeed())
+				Expect(r.FormValue("token")).To(Equal("tok"))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				Expect(json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "redirected-user"})).To(Succeed())
 				return
 			}
-			http.Redirect(w, r, "/target", http.StatusFound)
+			http.Redirect(w, r, "/target", http.StatusTemporaryRedirect)
 		}))
 		defer sameOriginServer.Close()
 
@@ -1296,7 +1299,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		Expect(errNeg).To(HaveOccurred())
 		Expect(errNeg.Error()).To(ContainSubstring("token has expired"))
 
-		// Non-numeric exp (e.g. "not-a-number") is ignored and token is accepted
+		// Non-numeric exp (e.g. "not-a-number") is rejected with invalid exp claim
 		serverNonNum := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -1309,9 +1312,32 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		defer serverNonNum.Close()
 
 		introNonNum := NewNimbusOpaqueTokenIntrospector(serverNonNum.URL, "c", "s").WithClockSkew(0)
-		prinNonNum, errNonNum := introNonNum.Introspect("tok")
-		Expect(errNonNum).NotTo(HaveOccurred())
-		Expect(prinNonNum.GetName()).To(Equal("str-exp-user"))
+		_, errNonNum := introNonNum.Introspect("tok")
+		Expect(errNonNum).To(HaveOccurred())
+		oauthEx, isOAuthEx := errNonNum.(*OAuth2AuthenticationException)
+		Expect(isOAuthEx).To(BeTrue())
+		Expect(oauthEx.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthEx.OAuth2Error().ErrorDescription).To(Equal("invalid exp claim"))
+
+		// Non-numeric nbf (e.g. "not-a-number") is rejected with invalid nbf claim
+		serverNonNumNbf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "str-nbf-user",
+				"nbf":    "not-a-number",
+			})).To(Succeed())
+		}))
+		defer serverNonNumNbf.Close()
+
+		introNonNumNbf := NewNimbusOpaqueTokenIntrospector(serverNonNumNbf.URL, "c", "s").WithClockSkew(0)
+		_, errNonNumNbf := introNonNumNbf.Introspect("tok")
+		Expect(errNonNumNbf).To(HaveOccurred())
+		oauthExNbf, isOAuthExNbf := errNonNumNbf.(*OAuth2AuthenticationException)
+		Expect(isOAuthExNbf).To(BeTrue())
+		Expect(oauthExNbf.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthExNbf.OAuth2Error().ErrorDescription).To(Equal("invalid nbf claim"))
 	})
 
 	It("handles int64 and json.Number exp/nbf, empty authority prefix, and request errors", func() {
@@ -1469,6 +1495,69 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		fbRes, fbErr := multiMgr.Authenticate(tok)
 		Expect(fbErr).NotTo(HaveOccurred())
 		Expect(fbRes.GetName()).To(Equal("fb-user"))
+	})
+
+	It("grants SCOPE_read authority when scope array contains space-separated 'read write' in end-to-end authentication", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "split-user",
+				"scope":  []string{"read write", "admin"},
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s")
+		provider := NewOpaqueTokenAuthenticationProvider(introspector)
+
+		auth, err := provider.Authenticate(NewBearerTokenAuthenticationToken("multi-scope-tok"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth.IsAuthenticated()).To(BeTrue())
+
+		var authNames []string
+		for _, a := range auth.GetAuthorities() {
+			authNames = append(authNames, a.Authority())
+		}
+		Expect(authNames).To(ContainElement("SCOPE_read"))
+		Expect(authNames).To(ContainElement("SCOPE_write"))
+		Expect(authNames).To(ContainElement("SCOPE_admin"))
+
+		// Also verify via BearerTokenAuthenticationFilter end-to-end
+		ctxHolder := &mockSecurityContextHolder{}
+		filter := &BearerTokenAuthenticationFilter{}
+		cfg := &BearerTokenConfig{
+			OpaqueTokenIntrospector: introspector,
+			SecurityContextHolder:   ctxHolder,
+			RealmName:               "test-realm",
+		}
+		builder := &HttpSecurityBuilder{}
+		builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
+		sec := builder.Build()
+		ctx := context.WithValue(context.Background(), PrototypeContextParentInstance, sec)
+		Expect(filter.WithContext(ctx)).To(Succeed())
+
+		reqURL, urlErr := url.Parse("https://api.example.com/data")
+		Expect(urlErr).NotTo(HaveOccurred())
+		handler := NewMockSecurityHandler(HttpMethods.GET, reqURL)
+		handler.SetHeader("Authorization", "Bearer multi-scope-tok")
+
+		filterErr := filter.Authenticate(handler)
+		Expect(filterErr).To(HaveOccurred())
+		Expect(filterErr.Action()).To(Equal(DefaultSecurityFilterAction{}.New().NEXT.Name()))
+
+		storedAuth := ctxHolder.GetContext().GetAuthentication()
+		Expect(storedAuth).NotTo(BeNil())
+		Expect(storedAuth.IsAuthenticated()).To(BeTrue())
+
+		var filterAuthNames []string
+		for _, a := range storedAuth.GetAuthorities() {
+			filterAuthNames = append(filterAuthNames, a.Authority())
+		}
+		Expect(filterAuthNames).To(ContainElement("SCOPE_read"))
+		Expect(filterAuthNames).To(ContainElement("SCOPE_write"))
+		Expect(filterAuthNames).To(ContainElement("SCOPE_admin"))
 	})
 
 	It("covers JwtAuthenticationProvider WithDecoder and converter error, and filter WithJwtDecoder", func() {

@@ -65,3 +65,23 @@ func (this *BearerTokenAuthenticationFilter) SetInjectedIntrospectorForTest(intr
 func (this *BearerTokenAuthenticationFilter) SetInjectedOpaqueConverterForTest(conv OpaqueTokenAuthenticationConverter) {
 	this.injectedOpaqueConverter = OptionalOf(conv)
 }
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedJwtDecoderForTest(dec JwtDecoder) {
+	this.injectedJwtDecoder = OptionalOf(dec)
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedConverterForTest(conv JwtAuthenticationConverter) {
+	this.injectedConverter = OptionalOf(conv)
+}
+
+func NewBearerAuthenticationManagerForTest(
+	jwtProvider *JwtAuthenticationProvider,
+	opaqueProvider *OpaqueTokenAuthenticationProvider,
+	fallback AuthenticationManager,
+) AuthenticationManager {
+	return &bearerAuthenticationManager{
+		jwtProvider:    jwtProvider,
+		opaqueProvider: opaqueProvider,
+		fallback:       fallback,
+	}
+}

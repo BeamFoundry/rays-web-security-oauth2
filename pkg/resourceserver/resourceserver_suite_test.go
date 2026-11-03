@@ -3,6 +3,7 @@ package resourceserver_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1018,4 +1019,242 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		Expect(defaultEx.Status()).To(Equal(401))
 		Expect(h.Header("WWW-Authenticate")).To(ContainSubstring(`error="invalid_token"`))
 	})
+
+	It("handles nil principal and nil token in BearerTokenAuthentication", func() {
+		auth := BearerTokenAuthentication{}.New(nil, nil, nil)
+		Expect(auth.GetName()).To(Equal(""))
+		Expect(auth.GetCredentials()).To(Equal(""))
+		Expect(auth.GetToken()).To(BeNil())
+		Expect(auth.GetAttributes()).To(BeEmpty())
+	})
+
+	It("handles various scp formats, int64 exp/iat, and nil principal in DefaultOpaqueTokenAuthenticationConverter", func() {
+		conv := NewDefaultOpaqueTokenAuthenticationConverter()
+		_, err := conv.Convert("raw", nil)
+		Expect(err).To(HaveOccurred())
+
+		now := time.Now()
+		// exp and iat as int64, scp as string
+		attrs1 := map[string]any{
+			"sub": "user-int64",
+			"scp": "read write",
+			"exp": now.Add(time.Hour).Unix(),
+			"iat": now.Unix(),
+		}
+		p1 := NewDefaultOAuth2AuthenticatedPrincipal("user-int64", attrs1, nil)
+		auth1, err := conv.Convert("raw-1", p1)
+		Expect(err).NotTo(HaveOccurred())
+		bAuth1, ok := auth1.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuth1.GetToken().Scopes).To(ConsistOf("read", "write"))
+		Expect(bAuth1.GetToken().IssuedAt.Unix()).To(Equal(now.Unix()))
+		Expect(bAuth1.GetToken().ExpiresAt.Unix()).To(Equal(now.Add(time.Hour).Unix()))
+
+		// scp as []string
+		attrs2 := map[string]any{
+			"sub": "user-slice-str",
+			"scp": []string{"admin", "manage"},
+		}
+		p2 := NewDefaultOAuth2AuthenticatedPrincipal("user-slice-str", attrs2, nil)
+		auth2, err := conv.Convert("raw-2", p2)
+		Expect(err).NotTo(HaveOccurred())
+		bAuth2, ok := auth2.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuth2.GetToken().Scopes).To(ConsistOf("admin", "manage"))
+
+		// scp as []any
+		attrs3 := map[string]any{
+			"sub": "user-slice-any",
+			"scp": []any{"read", "custom"},
+		}
+		p3 := NewDefaultOAuth2AuthenticatedPrincipal("user-slice-any", attrs3, nil)
+		auth3, err := conv.Convert("raw-3", p3)
+		Expect(err).NotTo(HaveOccurred())
+		bAuth3, ok := auth3.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuth3.GetToken().Scopes).To(ConsistOf("read", "custom"))
+	})
+
+	It("handles int64 and json.Number exp/nbf, empty authority prefix, and request errors", func() {
+		// Request error with invalid URL
+		badIntrospector := NewNimbusOpaqueTokenIntrospector("://invalid-url", "c", "s")
+		_, err := badIntrospector.Introspect("tok")
+		Expect(err).To(HaveOccurred())
+
+		// Server with int64 exp/nbf, []string authorities, and fallback to username
+		now := time.Now()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active":      true,
+				"username":    "charlie-user",
+				"scope":       "read write",
+				"authorities": []string{"ROLE_EDITOR", "CUSTOM_AUTH"},
+				"exp":         now.Add(time.Hour).Unix(),
+				"nbf":         now.Add(-time.Minute).Unix(),
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s").
+			WithAuthorityPrefix("").
+			WithTimeout(0).
+			WithClockSkew(5 * time.Second)
+
+		principal, err := introspector.Introspect("valid-tok")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(principal.GetName()).To(Equal("charlie-user"))
+
+		var authNames []string
+		for _, a := range principal.GetAuthorities() {
+			authNames = append(authNames, a.Authority())
+		}
+		Expect(authNames).To(ContainElement("read"))
+		Expect(authNames).To(ContainElement("write"))
+		Expect(authNames).To(ContainElement("ROLE_EDITOR"))
+		Expect(authNames).To(ContainElement("CUSTOM_AUTH"))
+
+		// json.Number for exp and nbf
+		jsonServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			expStr := fmt.Sprintf(`{"active":true,"sub":"sub-num","scope":"  ","exp":%d,"nbf":%d}`, now.Add(time.Hour).Unix(), now.Add(-time.Minute).Unix())
+			_, writeErr := w.Write([]byte(expStr))
+			Expect(writeErr).NotTo(HaveOccurred())
+		}))
+		defer jsonServer.Close()
+
+		numIntrospector := NewNimbusOpaqueTokenIntrospector(jsonServer.URL, "c", "s").
+			WithHTTPClient(nil).
+			WithPrincipalClaimName("")
+		numPrincipal, err := numIntrospector.Introspect("tok-num")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(numPrincipal.GetName()).To(Equal("sub-num"))
+
+		// Network error (connection refused)
+		connRefusedIntro := NewNimbusOpaqueTokenIntrospector("http://127.0.0.1:59999/introspect", "c", "s")
+		_, netErr := connRefusedIntro.Introspect("tok")
+		Expect(netErr).To(HaveOccurred())
+	})
+
+	It("covers OpaqueTokenAuthenticationProvider lifecycle, WithIntrospector, and lazy converter", func() {
+		mockIntro := NewNimbusOpaqueTokenIntrospector("https://auth.example.com", "c", "s")
+		p := (&OpaqueTokenAuthenticationProvider{}).WithIntrospector(mockIntro)
+		Expect(p.GetIntrospectorForTest()).To(Equal(mockIntro))
+
+		// PostConstruct with no converter sets default converter
+		pNoConv := &OpaqueTokenAuthenticationProvider{}
+		pNoConv.SetInjectedIntrospectorForTest(mockIntro)
+		Expect(pNoConv.PostConstruct()).To(Succeed())
+		Expect(pNoConv.GetConverterForTest()).NotTo(BeNil())
+
+		// Authenticate with injected introspector when direct introspector is nil
+		now := time.Now()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "lazy-user",
+				"exp":    float64(now.Add(time.Hour).Unix()),
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		liveIntro := NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s")
+		pLazy := &OpaqueTokenAuthenticationProvider{}
+		pLazy.SetInjectedIntrospectorForTest(liveIntro)
+
+		token := NewBearerTokenAuthenticationToken("tok-lazy")
+		auth, err := pLazy.Authenticate(token)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth.GetName()).To(Equal("lazy-user"))
+
+		// Introspector returning generic error
+		errIntro := NewNimbusOpaqueTokenIntrospector("://bad", "c", "s")
+		pErr := NewOpaqueTokenAuthenticationProvider(errIntro)
+		_, errAuth := pErr.Authenticate(token)
+		Expect(errAuth).To(HaveOccurred())
+	})
+
+	It("tests bearerAuthenticationManager fallback chaining and unsupported auth", func() {
+		// Unsupported auth type
+		emptyMgr := NewBearerAuthenticationManagerForTest(nil, nil, nil)
+		_, err := emptyMgr.Authenticate(&mockSimpleAuth{})
+		Expect(err).To(HaveOccurred())
+
+		// Failing JWT provider falling back to successful Opaque provider
+		now := time.Now()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "fallback-user",
+				"exp":    float64(now.Add(time.Hour).Unix()),
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		jwtProvider := NewJwtAuthenticationProvider(&mockFailingJwtDecoder{})
+
+		opaqueIntro := NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s")
+		opaqueProvider := NewOpaqueTokenAuthenticationProvider(opaqueIntro)
+
+		chainedMgr := NewBearerAuthenticationManagerForTest(jwtProvider, opaqueProvider, nil)
+		tok := NewBearerTokenAuthenticationToken("jwt-or-opaque-token")
+		res, resErr := chainedMgr.Authenticate(tok)
+		Expect(resErr).NotTo(HaveOccurred())
+		Expect(res.GetName()).To(Equal("fallback-user"))
+
+		// Both fail, falling back to custom fallback manager
+		failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer failServer.Close()
+		failIntroLive := NewNimbusOpaqueTokenIntrospector(failServer.URL, "c", "s")
+		failingOpaqueProvider := NewOpaqueTokenAuthenticationProvider(failIntroLive)
+
+		fallbackMgr := &mockAuthManager{
+			authenticateFunc: func(_ Authentication) (Authentication, AuthenticationException) {
+				return JwtAuthenticationToken{}.New(&Jwt{TokenValue: "fb", Claims: map[string]any{"sub": "fb-user"}}, nil, "fb-user"), nil
+			},
+		}
+
+		multiMgr := NewBearerAuthenticationManagerForTest(jwtProvider, failingOpaqueProvider, fallbackMgr)
+		fbRes, fbErr := multiMgr.Authenticate(tok)
+		Expect(fbErr).NotTo(HaveOccurred())
+		Expect(fbRes.GetName()).To(Equal("fb-user"))
+	})
+
+	It("covers JwtAuthenticationProvider WithDecoder and converter error, and filter WithJwtDecoder", func() {
+		mockDec := &mockFailingJwtDecoder{}
+		p := (&JwtAuthenticationProvider{}).WithDecoder(mockDec)
+		Expect(p.GetDecoderForTest()).To(Equal(mockDec))
+
+		// Filter WithJwtDecoder and config overrides
+		filter := (&BearerTokenAuthenticationFilter{}).WithJwtDecoder(mockDec)
+		filter.SetInjectedJwtDecoderForTest(mockDec)
+		filter.SetInjectedConverterForTest(NewDefaultJwtAuthenticationConverter())
+
+		resolver := DefaultBearerTokenResolver{}.New()
+		cfg := &BearerTokenConfig{
+			TokenResolver:         resolver,
+			AuthenticationManager: &mockAuthManager{},
+			JwtDecoder:            mockDec,
+			RealmName:             "test-realm",
+		}
+		builder := &HttpSecurityBuilder{}
+		builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
+		sec := builder.Build()
+		ctx := context.WithValue(context.Background(), PrototypeContextParentInstance, sec)
+		Expect(filter.WithContext(ctx)).To(Succeed())
+	})
 })
+
+type mockFailingJwtDecoder struct{}
+
+func (this *mockFailingJwtDecoder) Decode(_ string) (*Jwt, Error) {
+	return nil, NewError("JwtError", "invalid signature")
+}

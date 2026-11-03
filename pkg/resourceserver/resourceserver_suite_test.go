@@ -902,6 +902,10 @@ var _ = Describe("OpaqueTokenAuthenticationProvider", func() {
 		bearerTok := NewBearerTokenAuthenticationToken("inactive-token")
 		_, authEx := provider.Authenticate(bearerTok)
 		Expect(authEx).To(HaveOccurred())
+		oauthEx, isOAuthEx := authEx.(*OAuth2AuthenticationException)
+		Expect(isOAuthEx).To(BeTrue())
+		Expect(oauthEx.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthEx.OAuth2Error().ErrorDescription).To(Equal("invalid token"))
 	})
 
 	It("handles edge cases: non-bearer auth, nil introspector, and failing converter", func() {

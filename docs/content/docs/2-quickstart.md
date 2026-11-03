@@ -68,8 +68,8 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
         AuthorizedHTTPRequests().
             Paths("/api/public/**").PermitAll().
             Paths("/api/admin/**").HasAuthority("SCOPE_admin").
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```
@@ -136,8 +136,8 @@ func (this *WebSecurityConfig) HttpSecurity(
         And().
         AuthorizedHTTPRequests().
             Paths("/", "/login/**", "/static/**").PermitAll().
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```

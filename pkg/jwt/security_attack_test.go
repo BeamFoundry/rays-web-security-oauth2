@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"time"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
@@ -92,8 +93,8 @@ var _ = Describe("OAuth2 & JWT Security Attack Vectors", func() {
 			// 2-part token (signature omitted completely)
 			parts := []byte(tok.TokenValue)
 			dotIndex := -1
-			for i := len(parts) - 1; i >= 0; i-- {
-				if parts[i] == '.' {
+			for i, part := range slices.Backward(parts) {
+				if part == '.' {
 					dotIndex = i
 					break
 				}

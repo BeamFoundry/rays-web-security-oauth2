@@ -86,9 +86,6 @@ func (this *OpaqueTokenAuthenticationProvider) Authenticate(auth Authentication)
 	principal, err := introspector.Introspect(bearerToken.Token)
 	if err != nil {
 		err.LogError()
-		if authEx, ok := err.(AuthenticationException); ok {
-			return auth, authEx
-		}
 		return auth, OAuth2AuthenticationException{}.New(
 			OAuth2Error{ErrorCode: OAuth2ErrorInvalidToken, ErrorDescription: "invalid token"},
 			auth,

@@ -85,8 +85,8 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 		var wg sync.WaitGroup
 		startGate := make(chan struct{})
 
-		var successCount int64
-		var failCount int64
+		var successCount atomic.Int64
+		var failCount atomic.Int64
 
 		wg.Add(concurrentRequests)
 		for range concurrentRequests {
@@ -104,9 +104,9 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 
 				execErr := router.Execute(h)
 				if execErr == nil && h.Res.Code == 200 {
-					atomic.AddInt64(&successCount, 1)
+					successCount.Add(1)
 				} else {
-					atomic.AddInt64(&failCount, 1)
+					failCount.Add(1)
 				}
 			}()
 		}
@@ -115,9 +115,9 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 		wg.Wait()
 
 		// Exactly one request MUST succeed
-		Expect(atomic.LoadInt64(&successCount)).To(Equal(int64(1)), "Only ONE token exchange must succeed for a single-use code")
+		Expect(successCount.Load()).To(Equal(int64(1)), "Only ONE token exchange must succeed for a single-use code")
 		// All other 49 requests MUST fail
-		Expect(atomic.LoadInt64(&failCount)).To(Equal(int64(49)), "All subsequent parallel replay requests must be rejected")
+		Expect(failCount.Load()).To(Equal(int64(49)), "All subsequent parallel replay requests must be rejected")
 	})
 
 	It("strictly enforces single-use refresh token under 50 simultaneous parallel requests", func() {
@@ -179,8 +179,8 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 		var wg sync.WaitGroup
 		startGate := make(chan struct{})
 
-		var successCount int64
-		var failCount int64
+		var successCount atomic.Int64
+		var failCount atomic.Int64
 
 		wg.Add(concurrentRequests)
 		for range concurrentRequests {
@@ -196,9 +196,9 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 
 				execErr := router.Execute(h)
 				if execErr == nil && h.Res.Code == 200 {
-					atomic.AddInt64(&successCount, 1)
+					successCount.Add(1)
 				} else {
-					atomic.AddInt64(&failCount, 1)
+					failCount.Add(1)
 				}
 			}()
 		}
@@ -207,8 +207,8 @@ var _ = Describe("OAuth2 Authorization Server Concurrency & Replay Attacks", fun
 		wg.Wait()
 
 		// Exactly one request MUST succeed
-		Expect(atomic.LoadInt64(&successCount)).To(Equal(int64(1)), "Only ONE token exchange must succeed for a refresh token")
+		Expect(successCount.Load()).To(Equal(int64(1)), "Only ONE token exchange must succeed for a refresh token")
 		// All other 49 requests MUST fail
-		Expect(atomic.LoadInt64(&failCount)).To(Equal(int64(49)), "All subsequent parallel replay requests must be rejected")
+		Expect(failCount.Load()).To(Equal(int64(49)), "All subsequent parallel replay requests must be rejected")
 	})
 })

@@ -61,8 +61,8 @@ func (this *SecurityConfig) HttpSecurity(
 		And().
 		AuthorizedHTTPRequests().
 			Paths("/", "/login/**").PermitAll().
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -95,8 +95,8 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
 		AuthorizedHTTPRequests().
 			Paths("/api/public/**").PermitAll().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -134,8 +134,8 @@ func (this *OpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurity {
 		AuthorizedHTTPRequests().
 			Paths("/api/public/**").PermitAll().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```

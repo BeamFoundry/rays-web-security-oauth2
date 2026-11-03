@@ -214,8 +214,8 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
         AuthorizedHTTPRequests().
             Paths("/api/public/**").PermitAll().
             Paths("/api/admin/**").HasAuthority("SCOPE_admin").
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```
@@ -280,8 +280,8 @@ func (this *WebSecurityConfig) HttpSecurity(
         And().
         AuthorizedHTTPRequests().
             Paths("/", "/login/**", "/static/**").PermitAll().
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```
@@ -683,7 +683,8 @@ Now, endpoint policies can enforce:
 AuthorizedHTTPRequests().
     Paths("/api/orders/**").HasAuthority("SCOPE_read").
     Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN" from roles claims
-    AnyRequest().Authenticated()
+And().
+AnyRequest().Authenticated()
 ```
 
 ### Opaque Tokens & Introspection
@@ -731,8 +732,8 @@ func (this *OpaqueTokenSecurityConfig) HttpSecurity() *HttpSecurity {
         SessionCreationPolicy().Stateless().
         AuthorizedHTTPRequests().
             Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```
@@ -936,8 +937,8 @@ func (this *SecurityConfig) HttpSecurity(
 		And().
 		AuthorizedHTTPRequests().
 			Paths("/", "/login/**").PermitAll().
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -968,8 +969,8 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
 		AuthorizedHTTPRequests().
 			Paths("/api/public/**").PermitAll().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -1005,8 +1006,8 @@ func (this *OpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurity {
 		AuthorizedHTTPRequests().
 			Paths("/api/public/**").PermitAll().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```

@@ -249,8 +249,8 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 	// Validate requested scopes against registered scopes
 	var scopes []string
 	if scope != "" {
-		requestedScopes := strings.Split(scope, " ")
-		for _, s := range requestedScopes {
+		requestedScopes := strings.SplitSeq(scope, " ")
+		for s := range requestedScopes {
 			s = strings.TrimSpace(s)
 			if s == "" {
 				continue

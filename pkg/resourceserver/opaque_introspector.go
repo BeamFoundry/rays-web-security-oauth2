@@ -299,7 +299,7 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 		if val, exists := claims[claimKey]; exists {
 			switch v := val.(type) {
 			case string:
-				for _, part := range strings.Fields(v) {
+				for part := range strings.FieldsSeq(v) {
 					addAuth(claimKey, part)
 				}
 			case []any:

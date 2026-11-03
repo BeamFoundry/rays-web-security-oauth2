@@ -38,5 +38,6 @@ Now, endpoint policies can enforce:
 AuthorizedHTTPRequests().
     Paths("/api/orders/**").HasAuthority("SCOPE_read").
     Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN" from roles claims
-    AnyRequest().Authenticated()
+And().
+AnyRequest().Authenticated()
 ```

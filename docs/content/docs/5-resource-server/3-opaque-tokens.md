@@ -72,17 +72,29 @@ Upon successful introspection, `OpaqueTokenAuthenticationProvider` returns a `*B
 
 ```go
 type BearerTokenAuthentication struct {
-    Principal   OAuth2AuthenticatedPrincipal `json:"principal"`
-    Token       *OAuth2AccessToken           `json:"token"`
-    Attributes  map[string]any               `json:"attributes"`
+    Token       *OAuth2AccessToken `json:"token"`
+    Attributes  map[string]any     `json:"attributes"`
     AbstractAuthenticationToken
 }
 ```
 
 - **`GetName()`**: Returns the resolved principal name (from `sub`, `username`, or custom claim).
 - **`GetCredentials()`**: Returns the raw token string.
-- **`GetPrincipal()`**: Returns the `OAuth2AuthenticatedPrincipal` containing all introspected attributes.
+- **`GetPrincipal()`**: Returns the embedded principal stored in `AbstractAuthenticationToken`.
 - **`GetAuthorities()`**: Returns the slice of `GrantedAuthority` mapped from `scope` or `roles`.
+
+To access introspected attributes and principal methods, retrieve the principal via `GetPrincipal()` with a type assertion to `OAuth2AuthenticatedPrincipal`:
+
+```go
+if principal, ok := auth.GetPrincipal().(OAuth2AuthenticatedPrincipal); ok {
+    name := principal.GetName()
+    claims := principal.GetAttributes()
+    authorities := principal.GetAuthorities()
+    _ = name
+    _ = claims
+    _ = authorities
+}
+```
 
 ---
 
@@ -124,8 +136,8 @@ func (this *OpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurity {
 			Paths("/api/public/**").PermitAll().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
 			Paths("/api/admin/**").HasAuthority("SCOPE_admin").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -153,8 +165,8 @@ func (this *CustomOpaqueTokenConfig) HttpSecurity(
 		SessionCreationPolicy().Stateless().
 		AuthorizedHTTPRequests().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -179,8 +191,8 @@ func (this *CustomOpaqueTokenConfig) HttpSecurity() *HttpSecurity {
 		And().
 		AuthorizedHTTPRequests().
 			Paths("/api/admin/**").HasRole("ADMIN").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```

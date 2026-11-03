@@ -103,7 +103,46 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
 
 ---
 
-## 🏛️ 3. Authorization Server Configuration
+## 🔑 3. Resource Server (Opaque Token Introspection) Configuration
+
+```go
+package config
+
+import (
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/config"
+	. "github.com/BeamFoundry/rays-web-security/pkg/config"
+	. "github.com/BeamFoundry/rays/pkg/core"
+)
+
+type OpaqueTokenResourceServerConfig struct {
+	Configuration
+}
+
+func (this *OpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurity {
+	// AuthenticationManager and SecurityContextHolder are auto-injected by Rays
+	return (&HttpSecurityBuilder{}).
+		With(OAuth2ResourceServer).
+			OpaqueToken(
+				"https://auth.example.com/oauth2/introspect",
+				"resource-server-client",
+				"resource-server-secret",
+			).
+			Realm("orders-api").
+		And().
+		Csrf().Disable().
+		SessionCreationPolicy().Stateless().
+		AuthorizedHTTPRequests().
+			Paths("/api/public/**").PermitAll().
+			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
+			AnyRequest().Authenticated().
+		And().
+		Build()
+}
+```
+
+---
+
+## 🏛️ 4. Authorization Server Configuration
 
 ```go
 package config

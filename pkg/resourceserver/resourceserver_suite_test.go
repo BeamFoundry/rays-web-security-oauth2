@@ -2,6 +2,9 @@ package resourceserver_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -616,6 +619,12 @@ func (this *failingJwtConverter) Convert(_ *Jwt) (*JwtAuthenticationToken, Error
 	return nil, NewError("ConversionError", "conversion failed")
 }
 
+type failingOpaqueConverter struct{}
+
+func (this *failingOpaqueConverter) Convert(_ string, _ OAuth2AuthenticatedPrincipal) (Authentication, Error) {
+	return nil, NewError("ConversionError", "opaque conversion failed")
+}
+
 type mockSimpleAuth struct{}
 
 func (this *mockSimpleAuth) GetAuthorities() []GrantedAuthority { return nil }
@@ -625,3 +634,388 @@ func (this *mockSimpleAuth) GetPrincipal() any                  { return nil }
 func (this *mockSimpleAuth) IsAuthenticated() bool              { return false }
 func (this *mockSimpleAuth) SetAuthenticated(_ bool)            {}
 func (this *mockSimpleAuth) GetName() string                    { return "simple" }
+
+var _ = Describe("NimbusOpaqueTokenIntrospector", func() {
+	It("successfully introspects an active token and returns OAuth2AuthenticatedPrincipal", func() {
+		now := time.Now()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.Method).To(Equal(http.MethodPost))
+			Expect(r.Header.Get("Content-Type")).To(Equal("application/x-www-form-urlencoded"))
+			Expect(r.Header.Get("Accept")).To(Equal("application/json"))
+
+			user, pass, ok := r.BasicAuth()
+			Expect(ok).To(BeTrue())
+			Expect(user).To(Equal("client-id-123"))
+			Expect(pass).To(Equal("client-secret-xyz"))
+
+			parseErr := r.ParseForm()
+			Expect(parseErr).NotTo(HaveOccurred())
+			Expect(r.Form.Get("token")).To(Equal("valid-opaque-tok"))
+			Expect(r.Form.Get("token_type_hint")).To(Equal("access_token"))
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]any{
+				"active":    true,
+				"sub":       "user-alice",
+				"scope":     "read write admin",
+				"exp":       now.Add(time.Hour).Unix(),
+				"iat":       now.Add(-time.Minute).Unix(),
+				"nbf":       now.Add(-time.Minute).Unix(),
+				"aud":       "https://api.example.com",
+				"client_id": "client-id-123",
+			}
+			encErr := json.NewEncoder(w).Encode(resp)
+			Expect(encErr).NotTo(HaveOccurred())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "client-id-123", "client-secret-xyz")
+		principal, err := introspector.Introspect("valid-opaque-tok")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(principal).NotTo(BeNil())
+		Expect(principal.GetName()).To(Equal("user-alice"))
+
+		var authNames []string
+		for _, a := range principal.GetAuthorities() {
+			authNames = append(authNames, a.Authority())
+		}
+		Expect(authNames).To(ConsistOf("SCOPE_read", "SCOPE_write", "SCOPE_admin"))
+		Expect(principal.GetAttributes()).To(HaveKeyWithValue("aud", "https://api.example.com"))
+	})
+
+	It("fails introspection when token is inactive", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": false})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewDefaultOpaqueTokenIntrospector(server.URL, "client", "secret")
+		principal, err := introspector.Introspect("inactive-token")
+		Expect(err).To(HaveOccurred())
+		Expect(principal).To(BeNil())
+		Expect(err.Error()).To(ContainSubstring("not active"))
+	})
+
+	It("fails introspection when token is expired", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "expired-user",
+				"exp":    time.Now().Add(-2 * time.Hour).Unix(),
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "client", "secret").
+			WithClockSkew(0)
+		_, err := introspector.Introspect("expired-token")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("expired"))
+	})
+
+	It("fails introspection when token is not yet valid (nbf in future)", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "future-user",
+				"nbf":    time.Now().Add(2 * time.Hour).Unix(),
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "client", "secret").
+			WithClockSkew(0)
+		_, err := introspector.Introspect("future-token")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("not yet valid"))
+	})
+
+	It("handles server errors, malformed responses, and validation edge cases", func() {
+		// Empty URI
+		emptyURI := NewNimbusOpaqueTokenIntrospector("", "client", "secret")
+		_, err := emptyURI.Introspect("tok")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("introspectionURI must not be empty"))
+
+		// Empty token
+		validIntro := NewNimbusOpaqueTokenIntrospector("https://auth.example.com/introspect", "client", "secret")
+		_, err = validIntro.Introspect("")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("token cannot be empty"))
+
+		// HTTP status != 200
+		errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer errServer.Close()
+		introspectorErr := NewNimbusOpaqueTokenIntrospector(errServer.URL, "client", "secret")
+		_, err = introspectorErr.Introspect("tok")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("returned status code 401"))
+
+		// Invalid JSON
+		badJSONServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, writeErr := w.Write([]byte("not valid json"))
+			Expect(writeErr).NotTo(HaveOccurred())
+		}))
+		defer badJSONServer.Close()
+		introspectorBadJSON := NewNimbusOpaqueTokenIntrospector(badJSONServer.URL, "client", "secret")
+		_, err = introspectorBadJSON.Introspect("tok")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to parse introspection response"))
+	})
+
+	It("supports custom principal claim name, authority prefix, custom HTTPClient, and timeout", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active":             true,
+				"preferred_username": "custom_bob",
+				"roles":              []any{"ADMIN", "OPERATOR"},
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "client", "secret").
+			WithHTTPClient(server.Client()).
+			WithPrincipalClaimName("preferred_username").
+			WithAuthoritiesClaims("roles").
+			WithAuthorityPrefix("ROLE_").
+			WithTimeout(5 * time.Second)
+
+		principal, err := introspector.Introspect("tok")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(principal.GetName()).To(Equal("custom_bob"))
+
+		var auths []string
+		for _, a := range principal.GetAuthorities() {
+			auths = append(auths, a.Authority())
+		}
+		Expect(auths).To(ConsistOf("ROLE_ADMIN", "ROLE_OPERATOR"))
+	})
+
+	It("falls back to username and client_id when sub is absent", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active":    true,
+				"client_id": "service-app",
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s")
+		principal, err := introspector.Introspect("tok")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(principal.GetName()).To(Equal("service-app"))
+	})
+})
+
+var _ = Describe("DefaultOpaqueTokenAuthenticationConverter", func() {
+	It("converts principal and token into BearerTokenAuthentication", func() {
+		now := time.Now()
+		attrs := map[string]any{
+			"sub":   "charlie",
+			"scope": "read write",
+			"exp":   float64(now.Add(time.Hour).Unix()),
+			"iat":   float64(now.Unix()),
+		}
+		authorities := []GrantedAuthority{Authority("SCOPE_read"), Authority("SCOPE_write")}
+		principal := NewDefaultOAuth2AuthenticatedPrincipal("charlie", attrs, authorities)
+
+		conv := NewDefaultOpaqueTokenAuthenticationConverter()
+		auth, err := conv.Convert("raw-opaque-token", principal)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth).NotTo(BeNil())
+		Expect(auth.IsAuthenticated()).To(BeTrue())
+		Expect(auth.GetName()).To(Equal("charlie"))
+		Expect(auth.GetCredentials()).To(Equal("raw-opaque-token"))
+
+		bearerAuth, ok := auth.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bearerAuth.GetToken()).NotTo(BeNil())
+		Expect(bearerAuth.GetToken().TokenValue).To(Equal("raw-opaque-token"))
+		Expect(bearerAuth.GetAttributes()).To(HaveKeyWithValue("sub", "charlie"))
+	})
+
+	It("rejects nil principal", func() {
+		conv := DefaultOpaqueTokenAuthenticationConverter{}.New().WithAuthorityPrefix("ROLE_")
+		_, err := conv.Convert("raw", nil)
+		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("OpaqueTokenAuthenticationProvider", func() {
+	It("authenticates a valid Bearer token and returns BearerTokenAuthentication", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "david",
+				"scope":  "profile email",
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "client-app", "client-secret")
+		provider := NewOpaqueTokenAuthenticationProvider(introspector)
+
+		bearerTok := NewBearerTokenAuthenticationToken("david-token")
+		Expect(provider.Supports(bearerTok)).To(BeTrue())
+
+		auth, authEx := provider.Authenticate(bearerTok)
+		Expect(authEx).NotTo(HaveOccurred())
+		Expect(auth.IsAuthenticated()).To(BeTrue())
+		Expect(auth.GetName()).To(Equal("david"))
+
+		var names []string
+		for _, a := range auth.GetAuthorities() {
+			names = append(names, a.Authority())
+		}
+		Expect(names).To(ConsistOf("SCOPE_profile", "SCOPE_email"))
+	})
+
+	It("fails authentication when token is invalid or inactive", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": false})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s")
+		provider := OpaqueTokenAuthenticationProvider{}.New(introspector)
+
+		bearerTok := NewBearerTokenAuthenticationToken("inactive-token")
+		_, authEx := provider.Authenticate(bearerTok)
+		Expect(authEx).To(HaveOccurred())
+	})
+
+	It("handles edge cases: non-bearer auth, nil introspector, and failing converter", func() {
+		p := NewOpaqueTokenAuthenticationProvider(nil)
+
+		// Non-bearer token
+		_, err := p.Authenticate(&mockSimpleAuth{})
+		Expect(err).To(HaveOccurred())
+
+		// Nil introspector
+		_, err = p.Authenticate(NewBearerTokenAuthenticationToken("tok"))
+		Expect(err).To(HaveOccurred())
+
+		// DI test and PostConstruct
+		mockIntro := NewNimbusOpaqueTokenIntrospector("https://auth.example.com", "c", "s")
+		pDI := &OpaqueTokenAuthenticationProvider{}
+		pDI.SetInjectedIntrospectorForTest(mockIntro)
+		pDI.SetInjectedConverterForTest(NewDefaultOpaqueTokenAuthenticationConverter())
+		Expect(pDI.PostConstruct()).To(Succeed())
+		Expect(pDI.GetIntrospectorForTest()).To(Equal(mockIntro))
+		Expect(pDI.GetConverterForTest()).NotTo(BeNil())
+
+		// Failing converter
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "test"})).To(Succeed())
+		}))
+		defer server.Close()
+
+		failingProv := NewOpaqueTokenAuthenticationProvider(NewNimbusOpaqueTokenIntrospector(server.URL, "c", "s")).
+			WithConverter(&failingOpaqueConverter{})
+		_, err = failingProv.Authenticate(NewBearerTokenAuthenticationToken("tok"))
+		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
+	It("authenticates bearer token when only OpaqueTokenIntrospector is configured in BearerTokenConfig", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "opaque-cfg-user",
+				"scope":  "read",
+			})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "rs-client", "rs-secret")
+		ctxHolder := &mockSecurityContextHolder{}
+		filter := &BearerTokenAuthenticationFilter{}
+		builder := &HttpSecurityBuilder{}
+		cfg := &BearerTokenConfig{
+			OpaqueTokenIntrospector: introspector,
+			SecurityContextHolder:   ctxHolder,
+		}
+		builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
+		sec := builder.Build()
+		ctx := context.WithValue(context.Background(), PrototypeContextParentInstance, sec)
+		Expect(filter.WithContext(ctx)).To(Succeed())
+
+		u, err := url.Parse("https://api.example.com/opaque-data")
+		Expect(err).NotTo(HaveOccurred())
+		h := NewMockSecurityHandler(HttpMethods.GET, u)
+		h.SetHeader("Authorization", "Bearer my-opaque-token")
+
+		authResult := filter.Authenticate(h)
+		Expect(authResult).To(HaveOccurred())
+		Expect(authResult.Action()).To(Equal(DefaultSecurityFilterAction{}.New().NEXT.Name()))
+		Expect(ctxHolder.GetContext().GetAuthentication()).NotTo(BeNil())
+		Expect(ctxHolder.GetContext().GetAuthentication().GetName()).To(Equal("opaque-cfg-user"))
+
+		// DI Injection into BearerTokenAuthenticationFilter
+		filterDI := &BearerTokenAuthenticationFilter{}
+		filterDI.SetInjectedIntrospectorForTest(introspector)
+		filterDI.SetInjectedOpaqueConverterForTest(NewDefaultOpaqueTokenAuthenticationConverter())
+		secDI := (&HttpSecurityBuilder{}).AddCustomSecurityFilter("bearerTokenAuthenticationFilter", &BearerTokenConfig{}).Build()
+		ctxDI := context.WithValue(context.Background(), PrototypeContextParentInstance, secDI)
+		Expect(filterDI.WithContext(ctxDI)).To(Succeed())
+	})
+
+	It("issues 401 when opaque token is inactive or rejected", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": false})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "rs", "sec")
+		ctxHolder := &mockSecurityContextHolder{}
+		filter := (&BearerTokenAuthenticationFilter{}).
+			WithOpaqueTokenIntrospector(introspector)
+
+		builder := &HttpSecurityBuilder{}
+		cfg := &BearerTokenConfig{
+			OpaqueTokenIntrospector: introspector,
+			SecurityContextHolder:   ctxHolder,
+		}
+		builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
+		sec := builder.Build()
+		ctx := context.WithValue(context.Background(), PrototypeContextParentInstance, sec)
+		Expect(filter.WithContext(ctx)).To(Succeed())
+
+		u, err := url.Parse("https://api.example.com/protected")
+		Expect(err).NotTo(HaveOccurred())
+		h := NewMockSecurityHandler(HttpMethods.GET, u)
+		h.SetHeader("Authorization", "Bearer invalid-token")
+
+		authResult := filter.Authenticate(h)
+		Expect(authResult).To(HaveOccurred())
+		defaultEx, ok := authResult.(*DefaultSecurityFilterChainException)
+		Expect(ok).To(BeTrue())
+		Expect(defaultEx.Status()).To(Equal(401))
+		Expect(h.Header("WWW-Authenticate")).To(ContainSubstring(`error="invalid_token"`))
+	})
+})

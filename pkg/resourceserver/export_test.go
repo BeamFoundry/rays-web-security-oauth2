@@ -41,3 +41,27 @@ func (this *BearerTokenAuthenticationFilter) SetInjectedDepsForTest(
 func (this *BearerTokenAuthenticationFilter) GetDepsForTest() (BearerTokenResolver, AuthenticationManager, SecurityContextHolder) {
 	return this.tokenResolver, this.authenticationManager, this.securityContextHolder
 }
+
+func (this *OpaqueTokenAuthenticationProvider) SetInjectedIntrospectorForTest(intro OpaqueTokenIntrospector) {
+	this.injectedIntrospector = OptionalOf(intro)
+}
+
+func (this *OpaqueTokenAuthenticationProvider) SetInjectedConverterForTest(conv OpaqueTokenAuthenticationConverter) {
+	this.injectedConverter = OptionalOf(conv)
+}
+
+func (this *OpaqueTokenAuthenticationProvider) GetIntrospectorForTest() OpaqueTokenIntrospector {
+	return this.introspector
+}
+
+func (this *OpaqueTokenAuthenticationProvider) GetConverterForTest() OpaqueTokenAuthenticationConverter {
+	return this.converter
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedIntrospectorForTest(intro OpaqueTokenIntrospector) {
+	this.injectedIntrospector = OptionalOf(intro)
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedOpaqueConverterForTest(conv OpaqueTokenAuthenticationConverter) {
+	this.injectedOpaqueConverter = OptionalOf(conv)
+}

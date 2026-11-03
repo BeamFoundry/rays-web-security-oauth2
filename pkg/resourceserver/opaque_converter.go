@@ -1,0 +1,89 @@
+package resourceserver
+
+import (
+	"strings"
+	"time"
+
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
+	. "github.com/BeamFoundry/rays-web-security/pkg/core"
+	. "github.com/BeamFoundry/rays/pkg/lang"
+)
+
+// OpaqueTokenAuthenticationConverter converts an introspected token and principal into an authenticated Authentication
+type OpaqueTokenAuthenticationConverter interface {
+	Convert(token string, principal OAuth2AuthenticatedPrincipal) (Authentication, Error)
+}
+
+// DefaultOpaqueTokenAuthenticationConverter is the default implementation of OpaqueTokenAuthenticationConverter
+type DefaultOpaqueTokenAuthenticationConverter struct {
+	authorityPrefix string
+}
+
+var _ OpaqueTokenAuthenticationConverter = &DefaultOpaqueTokenAuthenticationConverter{}
+
+func (this DefaultOpaqueTokenAuthenticationConverter) New() *DefaultOpaqueTokenAuthenticationConverter {
+	this.authorityPrefix = defaultAuthorityPrefix
+	return &this
+}
+
+func NewDefaultOpaqueTokenAuthenticationConverter() *DefaultOpaqueTokenAuthenticationConverter {
+	return DefaultOpaqueTokenAuthenticationConverter{}.New()
+}
+
+func (this *DefaultOpaqueTokenAuthenticationConverter) WithAuthorityPrefix(prefix string) *DefaultOpaqueTokenAuthenticationConverter {
+	this.authorityPrefix = prefix
+	return this
+}
+
+func (this *DefaultOpaqueTokenAuthenticationConverter) Convert(token string, principal OAuth2AuthenticatedPrincipal) (Authentication, Error) {
+	if principal == nil {
+		return nil, NewError("IllegalArgumentException", "principal cannot be nil")
+	}
+
+	authorities := principal.GetAuthorities()
+	attrs := principal.GetAttributes()
+
+	var issuedAt, expiresAt time.Time
+	if expVal, exists := attrs["exp"]; exists {
+		switch v := expVal.(type) {
+		case float64:
+			expiresAt = time.Unix(int64(v), 0)
+		case int64:
+			expiresAt = time.Unix(v, 0)
+		default:
+		}
+	}
+	if iatVal, exists := attrs["iat"]; exists {
+		switch v := iatVal.(type) {
+		case float64:
+			issuedAt = time.Unix(int64(v), 0)
+		case int64:
+			issuedAt = time.Unix(v, 0)
+		default:
+		}
+	}
+
+	var scopes []string
+	if scopeVal, exists := attrs[claimScope]; exists {
+		if s, ok := scopeVal.(string); ok {
+			scopes = strings.Fields(s)
+		}
+	} else if scpVal, scpExists := attrs[claimScp]; scpExists {
+		switch v := scpVal.(type) {
+		case string:
+			scopes = strings.Fields(v)
+		case []string:
+			scopes = v
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					scopes = append(scopes, s)
+				}
+			}
+		default:
+		}
+	}
+
+	accessToken := NewOAuth2AccessToken(TokenTypeBearer, token, issuedAt, expiresAt, scopes)
+	return NewBearerTokenAuthentication(principal, accessToken, authorities), nil
+}

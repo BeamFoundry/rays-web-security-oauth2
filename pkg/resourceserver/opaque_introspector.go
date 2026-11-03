@@ -1,0 +1,305 @@
+package resourceserver
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
+	. "github.com/BeamFoundry/rays-web-security/pkg/core"
+	. "github.com/BeamFoundry/rays/pkg/lang"
+)
+
+// OpaqueTokenIntrospector validates an OAuth 2.0 token against an RFC 7662 introspection endpoint
+type OpaqueTokenIntrospector interface {
+	Introspect(token string) (OAuth2AuthenticatedPrincipal, Error)
+}
+
+// NimbusOpaqueTokenIntrospector queries an OAuth 2.0 token introspection endpoint via HTTP POST
+type NimbusOpaqueTokenIntrospector struct {
+	httpClient         *http.Client
+	introspectionURI   string
+	clientID           string
+	clientSecret       string
+	authorityPrefix    string
+	principalClaimName string
+	authoritiesClaims  []string
+	clockSkew          time.Duration
+	timeout            time.Duration
+}
+
+// DefaultOpaqueTokenIntrospector is an alias to NimbusOpaqueTokenIntrospector
+type DefaultOpaqueTokenIntrospector = NimbusOpaqueTokenIntrospector
+
+var _ OpaqueTokenIntrospector = &NimbusOpaqueTokenIntrospector{}
+
+func (this NimbusOpaqueTokenIntrospector) New(
+	introspectionURI string,
+	clientID string,
+	clientSecret string,
+) *NimbusOpaqueTokenIntrospector {
+	this.introspectionURI = introspectionURI
+	this.clientID = clientID
+	this.clientSecret = clientSecret
+	this.httpClient = http.DefaultClient
+	this.authorityPrefix = defaultAuthorityPrefix
+	this.authoritiesClaims = []string{claimScope, claimScp, "authorities", "roles"}
+	this.principalClaimName = defaultPrincipalClaimName
+	this.clockSkew = 60 * time.Second
+	this.timeout = 10 * time.Second
+	return &this
+}
+
+func NewNimbusOpaqueTokenIntrospector(
+	introspectionURI string,
+	clientID string,
+	clientSecret string,
+) *NimbusOpaqueTokenIntrospector {
+	return NimbusOpaqueTokenIntrospector{}.New(introspectionURI, clientID, clientSecret)
+}
+
+func NewDefaultOpaqueTokenIntrospector(
+	introspectionURI string,
+	clientID string,
+	clientSecret string,
+) *NimbusOpaqueTokenIntrospector {
+	return NimbusOpaqueTokenIntrospector{}.New(introspectionURI, clientID, clientSecret)
+}
+
+func (this *NimbusOpaqueTokenIntrospector) WithHTTPClient(client *http.Client) *NimbusOpaqueTokenIntrospector {
+	if client != nil {
+		this.httpClient = client
+	}
+	return this
+}
+
+func (this *NimbusOpaqueTokenIntrospector) WithAuthorityPrefix(prefix string) *NimbusOpaqueTokenIntrospector {
+	this.authorityPrefix = prefix
+	return this
+}
+
+func (this *NimbusOpaqueTokenIntrospector) WithAuthoritiesClaims(claims ...string) *NimbusOpaqueTokenIntrospector {
+	this.authoritiesClaims = claims
+	return this
+}
+
+func (this *NimbusOpaqueTokenIntrospector) WithPrincipalClaimName(name string) *NimbusOpaqueTokenIntrospector {
+	this.principalClaimName = name
+	return this
+}
+
+func (this *NimbusOpaqueTokenIntrospector) WithClockSkew(skew time.Duration) *NimbusOpaqueTokenIntrospector {
+	this.clockSkew = skew
+	return this
+}
+
+func (this *NimbusOpaqueTokenIntrospector) WithTimeout(timeout time.Duration) *NimbusOpaqueTokenIntrospector {
+	this.timeout = timeout
+	return this
+}
+
+func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2AuthenticatedPrincipal, Error) {
+	if this.introspectionURI == "" {
+		return nil, NewError("InvalidConfigurationError", "introspectionURI must not be empty")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, OAuth2AuthenticationException{}.New(
+			OAuth2Error{ErrorCode: OAuth2ErrorInvalidToken, ErrorDescription: "token cannot be empty"},
+			nil,
+		)
+	}
+
+	timeout := this.timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	form := url.Values{}
+	form.Set("token", token)
+	form.Set("token_type_hint", "access_token")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, this.introspectionURI, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, NewErrorFrom(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if this.clientID != "" || this.clientSecret != "" {
+		req.SetBasicAuth(this.clientID, this.clientSecret)
+	}
+
+	client := this.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		return nil, NewErrorFrom(doErr)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			NewErrorFrom(closeErr).LogError()
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, OAuth2AuthenticationException{}.New(
+			OAuth2Error{
+				ErrorCode:        OAuth2ErrorInvalidToken,
+				ErrorDescription: fmt.Sprintf("introspection endpoint returned status code %d", resp.StatusCode),
+			},
+			nil,
+		)
+	}
+
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return nil, NewErrorFrom(readErr)
+	}
+
+	var claims map[string]any
+	if unmarshalErr := json.Unmarshal(bodyBytes, &claims); unmarshalErr != nil {
+		return nil, OAuth2AuthenticationException{}.New(
+			OAuth2Error{
+				ErrorCode:        OAuth2ErrorInvalidToken,
+				ErrorDescription: "failed to parse introspection response: " + unmarshalErr.Error(),
+			},
+			nil,
+		)
+	}
+
+	active, ok := claims["active"].(bool)
+	if !ok || !active {
+		return nil, OAuth2AuthenticationException{}.New(
+			OAuth2Error{
+				ErrorCode:        OAuth2ErrorInvalidToken,
+				ErrorDescription: "provided token is not active",
+			},
+			nil,
+		)
+	}
+
+	now := time.Now()
+	if expVal, exists := claims["exp"]; exists {
+		var expSec int64
+		switch v := expVal.(type) {
+		case float64:
+			expSec = int64(v)
+		case int64:
+			expSec = v
+		case json.Number:
+			if parsed, parseErr := v.Int64(); parseErr == nil {
+				expSec = parsed
+			}
+		default:
+		}
+		if expSec > 0 {
+			expTime := time.Unix(expSec, 0)
+			if now.Add(-this.clockSkew).After(expTime) {
+				return nil, OAuth2AuthenticationException{}.New(
+					OAuth2Error{
+						ErrorCode:        OAuth2ErrorInvalidToken,
+						ErrorDescription: "token has expired",
+					},
+					nil,
+				)
+			}
+		}
+	}
+
+	if nbfVal, exists := claims["nbf"]; exists {
+		var nbfSec int64
+		switch v := nbfVal.(type) {
+		case float64:
+			nbfSec = int64(v)
+		case int64:
+			nbfSec = v
+		case json.Number:
+			if parsed, parseErr := v.Int64(); parseErr == nil {
+				nbfSec = parsed
+			}
+		default:
+		}
+		if nbfSec > 0 {
+			nbfTime := time.Unix(nbfSec, 0)
+			if now.Add(this.clockSkew).Before(nbfTime) {
+				return nil, OAuth2AuthenticationException{}.New(
+					OAuth2Error{
+						ErrorCode:        OAuth2ErrorInvalidToken,
+						ErrorDescription: "token is not yet valid",
+					},
+					nil,
+				)
+			}
+		}
+	}
+
+	authorities := make([]GrantedAuthority, 0)
+	addAuth := func(sourceClaim, s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if sourceClaim == claimScope || sourceClaim == claimScp {
+			if this.authorityPrefix == "" {
+				authorities = append(authorities, Authority(s))
+			} else {
+				authorities = append(authorities, Authority(this.authorityPrefix+s))
+			}
+			return
+		}
+		if strings.HasPrefix(s, "ROLE_") || strings.HasPrefix(s, "SCOPE_") || this.authorityPrefix == "" {
+			authorities = append(authorities, Authority(s))
+		} else {
+			authorities = append(authorities, Authority(this.authorityPrefix+s))
+		}
+	}
+
+	for _, claimKey := range this.authoritiesClaims {
+		if val, exists := claims[claimKey]; exists {
+			switch v := val.(type) {
+			case string:
+				for _, part := range strings.Fields(v) {
+					addAuth(claimKey, part)
+				}
+			case []any:
+				for _, item := range v {
+					if s, strOk := item.(string); strOk {
+						addAuth(claimKey, s)
+					}
+				}
+			case []string:
+				for _, s := range v {
+					addAuth(claimKey, s)
+				}
+			default:
+			}
+		}
+	}
+
+	principalName := ""
+	if this.principalClaimName != "" {
+		if nameVal, strOk := claims[this.principalClaimName].(string); strOk && nameVal != "" {
+			principalName = nameVal
+		}
+	}
+	if principalName == "" {
+		if sub, strOk := claims[defaultPrincipalClaimName].(string); strOk && sub != "" {
+			principalName = sub
+		} else if username, strOk := claims["username"].(string); strOk && username != "" {
+			principalName = username
+		} else if clientID, strOk := claims["client_id"].(string); strOk && clientID != "" {
+			principalName = clientID
+		}
+	}
+
+	return NewDefaultOAuth2AuthenticatedPrincipal(principalName, claims, authorities), nil
+}

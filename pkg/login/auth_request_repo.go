@@ -174,16 +174,18 @@ func (this *SessionAuthorizationRequestRepository) RemoveAuthorizationRequest(ha
 func GenerateAuthorizationRequest(reg *ClientRegistration, args ...any) (*OAuth2AuthorizationRequest, Error) {
 	// Generate random state
 	stateBytes := make([]byte, 32)
-	if _, err := rand.Read(stateBytes); err != nil {
-		return nil, NewError("CryptoError", fmt.Sprintf("failed to generate random state: %s", err))
-	}
+	Try(func() {
+		_, err := rand.Read(stateBytes)
+		RaiseNilErr(err)
+	}).LogError()
 	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 
 	// Generate PKCE code_verifier and code_challenge (S256)
 	verifierBytes := make([]byte, 32)
-	if _, err := rand.Read(verifierBytes); err != nil {
-		return nil, NewError("CryptoError", fmt.Sprintf("failed to generate code_verifier: %s", err))
-	}
+	Try(func() {
+		_, err := rand.Read(verifierBytes)
+		RaiseNilErr(err)
+	}).LogError()
 	codeVerifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
 	hash := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(hash[:])

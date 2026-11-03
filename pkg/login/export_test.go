@@ -1,6 +1,8 @@
 package login
 
 import (
+	"net/http"
+
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/client"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
@@ -16,6 +18,16 @@ func (this *OAuth2LoginAuthenticationProvider) SetInjectedUserServiceForTest(svc
 // SetInjectedOidcUserServiceForTest injects a mock or custom OidcUserService for testing.
 func (this *OAuth2LoginAuthenticationProvider) SetInjectedOidcUserServiceForTest(svc OidcUserService) {
 	this.injectedOidcUserService = OptionalOf(svc)
+}
+
+// SetInjectedJwtDecoderForTest injects a mock or custom JwtDecoder for testing.
+func (this *OAuth2LoginAuthenticationProvider) SetInjectedJwtDecoderForTest(dec JwtDecoder) {
+	this.injectedJwtDecoder = OptionalOf(dec)
+}
+
+// SetHttpClientForTest injects an HTTP client for testing.
+func (this *OAuth2LoginAuthenticationProvider) SetHttpClientForTest(client *http.Client) {
+	this.httpClient = client
 }
 
 // GetUserServiceForTest returns the configured OAuth2UserService for test assertions.
@@ -52,4 +64,14 @@ func (this *OAuth2LoginAuthenticationFilter) SetInjectedDepsForTest(
 	if ctxHolder != nil {
 		this.injectedContextHolder = OptionalOf(ctxHolder)
 	}
+}
+
+// IsValidHostForTest exposes isValidHost for testing.
+func IsValidHostForTest(h string) bool {
+	return isValidHost(h)
+}
+
+// ResolveForwardedHeadersForTest exposes resolveForwardedHeaders for testing.
+func ResolveForwardedHeadersForTest(handler SecurityHandler, defaultScheme, defaultHost string) (scheme, host string) {
+	return resolveForwardedHeaders(handler, defaultScheme, defaultHost)
 }

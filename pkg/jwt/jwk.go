@@ -64,10 +64,12 @@ func (this RSAKeyManager) New(bits int, kid string) (*RSAKeyManager, Error) {
 	if bits < 2048 {
 		bits = 2048
 	}
-	priv, err := rsa.GenerateKey(rand.Reader, bits)
-	if err != nil {
-		return nil, NewError("RSAKeyGenerationError", fmt.Sprintf("failed to generate rsa key: %s", err))
-	}
+	var priv *rsa.PrivateKey
+	Try(func() {
+		var err error
+		priv, err = rsa.GenerateKey(rand.Reader, bits)
+		RaiseNilErr(err)
+	}).LogError()
 	if kid == "" {
 		kid = fmt.Sprintf("k-%d", time.Now().Unix())
 	}
@@ -207,20 +209,21 @@ func (this *DefaultJwtEncoder) Encode(params *JwtEncoderParameters) (*Jwt, Error
 			return nil, NewError("InvalidPrivateKeyError", "private key is not *rsa.PrivateKey")
 		}
 		hashed := sha256.Sum256([]byte(signingInput))
-		var rsaErr error
-		sig, rsaErr = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, hashed[:])
-		if rsaErr != nil {
-			return nil, NewError("SignTokenError", fmt.Sprintf("failed to sign token: %s", rsaErr))
-		}
+		Try(func() {
+			var rsaErr error
+			sig, rsaErr = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, hashed[:])
+			RaiseNilErr(rsaErr)
+		}).LogError()
 	case "HS256":
 		secret, ok := privKey.([]byte)
 		if !ok {
 			return nil, NewError("InvalidSecretKeyError", "secret key is not []byte")
 		}
 		mac := hmac.New(sha256.New, secret)
-		if _, writeErr := mac.Write([]byte(signingInput)); writeErr != nil {
-			NewErrorFrom(writeErr).LogError()
-		}
+		Try(func() {
+			_, writeErr := mac.Write([]byte(signingInput))
+			RaiseNilErr(writeErr)
+		}).LogError()
 		sig = mac.Sum(nil)
 	default:
 		return nil, NewError("UnsupportedAlgorithmError", "unsupported signing algorithm: "+alg)
@@ -320,9 +323,10 @@ func (this *NimbusJwtDecoder) Decode(token string) (*Jwt, Error) {
 			return nil, NewError("InvalidSecretKeyError", "secret key is not []byte")
 		}
 		mac := hmac.New(sha256.New, secret)
-		if _, writeErr := mac.Write([]byte(signingInput)); writeErr != nil {
-			NewErrorFrom(writeErr).LogError()
-		}
+		Try(func() {
+			_, writeErr := mac.Write([]byte(signingInput))
+			RaiseNilErr(writeErr)
+		}).LogError()
 		expectedSig := mac.Sum(nil)
 		if !hmac.Equal(sigBytes, expectedSig) {
 			return nil, NewError("SignatureVerificationError", "jwt hmac signature mismatch")
@@ -339,19 +343,8 @@ func (this *NimbusJwtDecoder) Decode(token string) (*Jwt, Error) {
 		return nil, NewError("JwtExpiredError", "missing exp claim")
 	}
 
-	var expUnix int64
-	switch v := expVal.(type) {
-	case float64:
-		expUnix = int64(v)
-	case int64:
-		expUnix = v
-	case json.Number:
-		n, numErr := v.Int64()
-		if numErr != nil {
-			return nil, NewError("JwtExpiredError", "invalid exp claim: non-numeric")
-		}
-		expUnix = n
-	default:
+	expUnix, ok := parseJwtTimestamp(expVal)
+	if !ok {
 		return nil, NewError("JwtExpiredError", "invalid exp claim: non-numeric")
 	}
 
@@ -366,21 +359,7 @@ func (this *NimbusJwtDecoder) Decode(token string) (*Jwt, Error) {
 
 	// Validate nbf
 	if nbfVal, ok := claims["nbf"]; ok {
-		var nbfUnix int64
-		switch v := nbfVal.(type) {
-		case float64:
-			nbfUnix = int64(v)
-		case int64:
-			nbfUnix = v
-		case json.Number:
-			if n, numErr := v.Int64(); numErr != nil {
-				NewErrorFrom(numErr).LogError()
-			} else {
-				nbfUnix = n
-			}
-		default:
-		}
-		if nbfUnix > 0 {
+		if nbfUnix, ok := parseJwtTimestamp(nbfVal); ok && nbfUnix > 0 {
 			nbfTime := time.Unix(nbfUnix, 0)
 			if now.Before(nbfTime.Add(-this.skew)) {
 				return nil, NewError("JwtNotYetValidError", "jwt is not yet valid (nbf)")
@@ -407,8 +386,6 @@ func (this *NimbusJwtDecoder) Decode(token string) (*Jwt, Error) {
 					tokenAudiences = append(tokenAudiences, s)
 				}
 			}
-		case []string:
-			tokenAudiences = append(tokenAudiences, aud...)
 		default:
 		}
 		matched := false
@@ -455,3 +432,19 @@ func ParseRSAPublicKeyFromJWK(jwk *JWK) (*rsa.PublicKey, Error) {
 		E: int(e),
 	}, nil
 }
+
+// parseJwtTimestamp parses a numeric Unix timestamp from claim value.
+func parseJwtTimestamp(val any) (int64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+

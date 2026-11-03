@@ -17,8 +17,10 @@ import (
 	. "github.com/onsi/gomega"
 
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	. "github.com/BeamFoundry/rays/pkg/testing"
 
 	keycloak "github.com/stillya/testcontainers-keycloak"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 // TestKeycloak runs the Ginkgo integration test suite against Keycloak.
@@ -42,6 +44,7 @@ func startKeycloak() {
 	keycloakContainer, err = keycloak.Run(
 		ctx,
 		"keycloak/keycloak:26.0",
+		testcontainers.WithLogger(GetLogger()),
 		keycloak.WithRealmImportFile(realmAbs),
 		keycloak.WithAdminUsername("admin"),
 		keycloak.WithAdminPassword("admin"),

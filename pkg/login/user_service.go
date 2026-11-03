@@ -69,9 +69,9 @@ func (this *DefaultOAuth2UserService) LoadUser(userRequest *OAuth2UserRequest) (
 		return nil, NewError("UserInfoRequestError", fmt.Sprintf("userinfo request failed: %s", reqErr))
 	}
 	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			NewErrorFrom(closeErr).LogError()
-		}
+		Try(func() {
+			RaiseNilErr(resp.Body.Close())
+		}).LogError()
 	}()
 
 	if resp.StatusCode != http.StatusOK {

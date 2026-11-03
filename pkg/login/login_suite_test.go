@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	. "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/web"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1264,6 +1266,268 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			})
 			Expect(err).To(HaveOccurred())
 			Expect(err.Name()).To(Equal("InvalidUserError"))
+			// Test DefaultOidcUserService constructor with nil
+			defaultOidcNil := NewDefaultOidcUserService(nil)
+			Expect(defaultOidcNil).NotTo(BeNil())
+
+			// Test OIDC user with missing custom UserNameAttributeName
+			regCustomName := ClientRegistrationBuilder{}.New("reg-custom-name").
+				ClientID("c-custom-name").
+				UserNameAttributeName("missing_custom_claim").
+				Build()
+			_, err = failingOidcUserSvc.LoadUser(&OidcUserRequest{
+				ClientRegistration: regCustomName,
+				AccessToken:        OAuth2AccessToken{}.New(TokenTypeBearer, "tok", time.Now(), time.Now().Add(time.Hour), nil),
+				IdToken:            &OidcIdToken{TokenValue: "id-tok", Claims: map[string]any{"sub": "sub-123"}},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("InvalidUserError"))
+
+			// Test OAuth2UserService with invalid UserInfoURI
+			badUISvc := NewDefaultOAuth2UserService(nil)
+			regBadUI := ClientRegistrationBuilder{}.New("reg-bad-ui").
+				UserInfoURI("://invalid-url\x7f").
+				Build()
+			_, err = badUISvc.LoadUser(&OAuth2UserRequest{
+				ClientRegistration: regBadUI,
+				AccessToken:        OAuth2AccessToken{}.New(TokenTypeBearer, "tok", time.Now(), time.Now().Add(time.Hour), nil),
+			})
+			Expect(err).To(HaveOccurred())
+
+			// Test OAuth2LoginAuthenticationFilter.WithTrustedProxy
+			filterWithTP := OAuth2LoginAuthenticationFilter{}.New(nil, nil, nil).WithTrustedProxy(true)
+			Expect(filterWithTP.Config().TrustedProxy).To(BeTrue())
+
+			// Test OAuth2LoginAuthenticationFilter.WithContext full config branch coverage
+			dummyRepo := InMemoryClientRegistrationRepository{}.New()
+			dummyAuthReqRepo := SessionAuthorizationRequestRepository{}.New()
+			fullLoginCfg := &OAuth2LoginConfig{
+				ClientRegistrationRepository: dummyRepo,
+				AuthRequestRepository:        dummyAuthReqRepo,
+				AuthenticationManager:        &mockAuthManager{},
+				SecurityContextHolder:        &mockSecurityContextHolder{},
+				DefaultRegistrationID:        "default-id",
+				DefaultSuccessURL:            "/dashboard",
+				LoginProcessingURL:           "/custom/callback/*",
+				AuthorizationBaseURI:         "/custom/authorize",
+				BaseURL:                      "https://app.example.com",
+				TrustedProxy:                 true,
+			}
+			chainWithLogin := (&HttpSecurityBuilder{}).Build()
+			chainWithLogin.SecurityFilters()["oAuth2LoginAuthenticationFilter"] = fullLoginCfg
+			filterWithCtx := OAuth2LoginAuthenticationFilter{}.New(nil, nil, nil)
+			ctxLogin := context.WithValue(context.Background(), PrototypeContextParentInstance, chainWithLogin)
+			Expect(filterWithCtx.WithContext(ctxLogin)).NotTo(HaveOccurred())
+
+			// Test RegisterSecurityEndpoint when GenerateAuthorizationRequest fails (500)
+			regBadRedirect := ClientRegistrationBuilder{}.New("reg-bad-redirect").
+				ClientID("bad-client").
+				AuthorizationURI("https://auth.example.com/auth").
+				RedirectURI("://invalid-url\x7f").
+				Build()
+			repoWithBadReg := InMemoryClientRegistrationRepository{}.New(regBadRedirect)
+			filterBadReg := OAuth2LoginAuthenticationFilter{}.New(
+				repoWithBadReg,
+				&mockAuthManager{},
+				&mockSecurityContextHolder{},
+			)
+			routerBadReg := NewMockSecurityRouter()
+			filterBadReg.RegisterSecurityEndpoint(routerBadReg)
+			uBadInit := ValErr(url.Parse("http://localhost:8080/oauth2/authorization/reg-bad-redirect"))
+			hBadInit := NewMockSecurityHandler(HttpMethods.GET, uBadInit)
+			errExec := routerBadReg.Execute(hBadInit)
+			Expect(errExec).To(HaveOccurred())
+			exInit, ok := errExec.(*DefaultSecurityFilterChainException)
+			Expect(ok).To(BeTrue())
+			Expect(exInit.Status()).To(Equal(500))
+
+			// Test Authenticate when AuthenticationManager fails
+			failingAuthMgr := &mockAuthManager{
+				authenticateFunc: func(a Authentication) (Authentication, AuthenticationException) {
+					return nil, OAuth2AuthenticationException{}.New(OAuth2Error{ErrorCode: "access_denied"}, a)
+				},
+			}
+			regCallback := ClientRegistrationBuilder{}.New("reg-cb").
+				ClientID("client-cb").
+				Build()
+			authReqSaved := &OAuth2AuthorizationRequest{
+				ClientID:    "client-cb",
+				State:       "valid-state",
+				RedirectURI: "http://localhost:8080/login/oauth2/code/reg-cb",
+			}
+			sessionRepo := SessionAuthorizationRequestRepository{}.New()
+			uCb := ValErr(url.Parse("http://localhost:8080/login/oauth2/code/reg-cb?code=auth-code&state=valid-state"))
+			hCb := NewMockSecurityHandler(HttpMethods.GET, uCb)
+			sessionRepo.SaveAuthorizationRequest(authReqSaved, hCb)
+			filterFailingMgr := OAuth2LoginAuthenticationFilter{}.New(
+				InMemoryClientRegistrationRepository{}.New(regCallback),
+				failingAuthMgr,
+				&mockSecurityContextHolder{},
+			)
+			exCb := filterFailingMgr.Authenticate(hCb)
+			exDefault, ok := exCb.(*DefaultSecurityFilterChainException)
+			Expect(ok).To(BeTrue())
+			Expect(exDefault.Status()).To(Equal(401))
+
+			// Test OAuth2LoginAuthenticationProvider with injected services
+			provInjected := OAuth2LoginAuthenticationProvider{}.New(nil, nil, nil)
+			provInjected.SetInjectedUserServiceForTest(&failingOAuth2UserService{})
+			provInjected.SetInjectedOidcUserServiceForTest(&failingOidcUserService{})
+			Expect(provInjected.GetUserServiceForTest()).NotTo(BeNil())
+			Expect(provInjected.GetOidcUserServiceForTest()).NotTo(BeNil())
+
+			// Test failing oidcUserService in OAuth2LoginAuthenticationProvider.Authenticate
+			idClaimsOidc := map[string]any{
+				"sub": "user-oidc-123",
+				"iss": "https://auth.example.com",
+				"aud": "client-cb",
+				"exp": time.Now().Add(time.Hour).Unix(),
+			}
+			idTokKM, _ := RSAKeyManager{}.New(2048, "oidc-k1")
+			idEnc := DefaultJwtEncoder{}.New(idTokKM)
+			idJwt, _ := idEnc.Encode(&JwtEncoderParameters{ClaimsSet: &JwtClaimsSet{
+				Subject:   "user-oidc-123",
+				Issuer:    "https://auth.example.com",
+				ExpiresAt: time.Now().Add(time.Hour),
+				Claims:    idClaimsOidc,
+			}})
+			idTokVal := idJwt.TokenValue
+
+			tokenServerOidc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "valid-at",
+					"token_type":   "Bearer",
+					"id_token":     idTokVal,
+					"expires_in":   3600,
+				})).To(Succeed())
+			}))
+			defer tokenServerOidc.Close()
+
+			regOidcWithJWK := ClientRegistrationBuilder{}.New("reg-oidc-jwk").
+				ClientID("client-cb").
+				TokenURI(tokenServerOidc.URL).
+				JwkSetURI("http://invalid.local/certs").
+				Build()
+
+			provWithFailingOidc := (&OAuth2LoginAuthenticationProvider{}).WithJwtDecoder(NimbusJwtDecoder{}.New(idTokKM))
+			provWithFailingOidc.SetInjectedOidcUserServiceForTest(&failingOidcUserService{})
+			provWithFailingOidc.SetInjectedUserServiceForTest(&failingOAuth2UserService{})
+			provWithFailingOidc.SetHttpClientForTest(tokenServerOidc.Client())
+
+			exchangeOidc := OAuth2AuthorizationExchange{
+				AuthorizationRequest:  &OAuth2AuthorizationRequest{ClientID: "client-cb", RedirectURI: "http://cb"},
+				AuthorizationResponse: &OAuth2AuthorizationResponse{Code: "code-123"},
+			}
+			_, authErr := provWithFailingOidc.Authenticate(OAuth2LoginAuthenticationToken{}.New(regOidcWithJWK, exchangeOidc))
+			Expect(authErr).To(HaveOccurred())
+
+			// Test raw provider calling getOrCreateDecoder (nil jwksDecoders map branch)
+			rawProv := &OAuth2LoginAuthenticationProvider{}
+			rawProv.GetOrCreateDecoderForTest(regOidcWithJWK)
+
+			// Test exchangeCodeForTokens errors: invalid TokenURI and transport error
+			regBadTokenURI := ClientRegistrationBuilder{}.New("reg-bad-token-uri").
+				ClientID("client-cb").
+				TokenURI("://invalid-url\x7f").
+				Build()
+			provBadURI := OAuth2LoginAuthenticationProvider{}.New(nil, nil, nil)
+			_, authErr = provBadURI.Authenticate(OAuth2LoginAuthenticationToken{}.New(regBadTokenURI, exchangeOidc))
+			Expect(authErr).To(HaveOccurred())
+
+			failingClient = &http.Client{Transport: &loginFailingRoundTripper{}}
+			provFailingClient := OAuth2LoginAuthenticationProvider{}.New(failingClient, nil, nil)
+			_, authErr = provFailingClient.Authenticate(OAuth2LoginAuthenticationToken{}.New(regOidcWithJWK, exchangeOidc))
+			Expect(authErr).To(HaveOccurred())
+
+			// Test PostConstruct with injected decoder and when JwkSetURI is empty
+			regNoJWKS := ClientRegistrationBuilder{}.New("reg-no-jwks").Build()
+			provNoJWKS := OAuth2LoginAuthenticationProvider{}.New(nil, nil, nil)
+			provNoJWKS.SetInjectedJwtDecoderForTest(NimbusJwtDecoder{}.New(nil))
+			Expect(provNoJWKS.PostConstruct()).NotTo(HaveOccurred())
+			Expect(provNoJWKS.GetOrCreateDecoderForTest(regNoJWKS)).NotTo(BeNil())
+			provNoDec := OAuth2LoginAuthenticationProvider{}.New(nil, nil, nil)
+			Expect(provNoDec.GetOrCreateDecoderForTest(nil)).To(BeNil())
+			Expect(provNoDec.GetOrCreateDecoderForTest(regNoJWKS)).To(BeNil())
+
+			// Test OAuth2LoginAuthenticationProvider with uninitialized services and error in exchange
+			provUninit := &OAuth2LoginAuthenticationProvider{}
+			exchangeErr := OAuth2AuthorizationExchange{
+				AuthorizationRequest:  &OAuth2AuthorizationRequest{State: "st-err"},
+				AuthorizationResponse: &OAuth2AuthorizationResponse{Error: "access_denied", ErrorDesc: "User canceled"},
+			}
+			_, uninitErr := provUninit.Authenticate(OAuth2LoginAuthenticationToken{}.New(regOidcWithJWK, exchangeErr))
+			Expect(uninitErr).To(HaveOccurred())
+
+			// Test auth_request_repo.go edge cases:
+			// isValidHost
+			Expect(IsValidHostForTest("")).To(BeFalse())
+			Expect(IsValidHostForTest(strings.Repeat("a", 256))).To(BeFalse())
+			Expect(IsValidHostForTest("host with space")).To(BeFalse())
+			Expect(IsValidHostForTest("host/slash")).To(BeFalse())
+			Expect(IsValidHostForTest("host@at")).To(BeFalse())
+			Expect(IsValidHostForTest("example.com:abc")).To(BeFalse())
+			Expect(IsValidHostForTest("example.com:0")).To(BeFalse())
+			Expect(IsValidHostForTest("example.com:70000")).To(BeFalse())
+			Expect(IsValidHostForTest("127.0.0.1")).To(BeTrue())
+			Expect(IsValidHostForTest("127.0.0.1:8080")).To(BeTrue())
+			Expect(IsValidHostForTest("[::1]:8080")).To(BeTrue())
+			Expect(IsValidHostForTest("example..com")).To(BeFalse())
+			Expect(IsValidHostForTest(strings.Repeat("a", 64) + ".com")).To(BeFalse())
+			Expect(IsValidHostForTest("-example.com")).To(BeFalse())
+			Expect(IsValidHostForTest("example-.com")).To(BeFalse())
+			Expect(IsValidHostForTest("exam_ple.com")).To(BeFalse())
+
+			// resolveForwardedHeaders with X-Forwarded-Port
+			uFwd := ValErr(url.Parse("http://localhost:8080/test"))
+			hFwd := NewMockSecurityHandler(HttpMethods.GET, uFwd)
+			hFwd.Req.Header.Set("X-Forwarded-Port", "8443")
+			hFwd.Req.Header.Set("X-Forwarded-Proto", "https")
+			hFwd.Req.Header.Set("X-Forwarded-Host", "example.com")
+			s, h := ResolveForwardedHeadersForTest(hFwd, "http", "localhost")
+			Expect(s).To(Equal("https"))
+			Expect(h).To(Equal("example.com:8443"))
+
+			// port 80 for http does not append
+			hFwd2 := NewMockSecurityHandler(HttpMethods.GET, uFwd)
+			hFwd2.Req.Header.Set("X-Forwarded-Port", "80")
+			hFwd2.Req.Header.Set("X-Forwarded-Proto", "http")
+			hFwd2.Req.Header.Set("X-Forwarded-Host", "example.com")
+			_, h2 := ResolveForwardedHeadersForTest(hFwd2, "http", "localhost")
+			Expect(h2).To(Equal("example.com"))
+
+			// port 443 for https does not append
+			hFwd3 := NewMockSecurityHandler(HttpMethods.GET, uFwd)
+			hFwd3.Req.Header.Set("X-Forwarded-Port", "443")
+			hFwd3.Req.Header.Set("X-Forwarded-Proto", "https")
+			hFwd3.Req.Header.Set("X-Forwarded-Host", "example.com")
+			_, h3 := ResolveForwardedHeadersForTest(hFwd3, "http", "localhost")
+			Expect(h3).To(Equal("example.com"))
+
+			// GenerateAuthorizationRequest options and edge cases
+			regRelURI := ClientRegistrationBuilder{}.New("reg-rel").
+				ClientID("c-rel").
+				AuthorizationURI("https://auth.example.com/auth").
+				RedirectURI("callback/rel").
+				Build()
+			hFwdRel := NewMockSecurityHandler(HttpMethods.GET, uFwd)
+			hFwdRel.Req.Header.Set("X-Forwarded-Host", "example.com")
+			hFwdRel.Req.Header.Set("X-Forwarded-Proto", "https")
+			reqRel, genErr := GenerateAuthorizationRequest(
+				regRelURI,
+				hFwdRel,
+				&AuthorizationRequestConfig{TrustedProxy: true},
+				12345, // invalid option type
+			)
+			Expect(genErr).NotTo(HaveOccurred())
+			Expect(reqRel.RedirectURI).To(Equal("https://example.com/callback/rel"))
+
+			// BaseURL with invalid host
+			_, genErr = GenerateAuthorizationRequest(
+				regRelURI,
+				&AuthorizationRequestConfig{BaseURL: "http://"},
+			)
+			Expect(genErr).To(HaveOccurred())
 		})
 	})
 })

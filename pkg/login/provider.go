@@ -117,15 +117,6 @@ func (this *OAuth2LoginAuthenticationProvider) getOrCreateDecoder(reg *ClientReg
 		this.decodersMu = &sync.RWMutex{}
 	}
 
-	this.decodersMu.RLock()
-	if this.jwksDecoders != nil {
-		if dec, ok := this.jwksDecoders[reg.RegistrationID]; ok {
-			this.decodersMu.RUnlock()
-			return dec
-		}
-	}
-	this.decodersMu.RUnlock()
-
 	this.decodersMu.Lock()
 	defer this.decodersMu.Unlock()
 
@@ -350,16 +341,18 @@ func (this *OAuth2LoginAuthenticationProvider) exchangeCodeForTokens(
 		return nil, NewError("TokenExchangeError", fmt.Sprintf("token request failed: %s", reqErr))
 	}
 	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			NewErrorFrom(closeErr).LogError()
-		}
+		Try(func() {
+			RaiseNilErr(resp.Body.Close())
+		}).LogError()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			NewErrorFrom(readErr).LogError()
-		}
+		var body []byte
+		Try(func() {
+			var readErr error
+			body, readErr = io.ReadAll(resp.Body)
+			RaiseNilErr(readErr)
+		}).LogError()
 		return nil, NewError("TokenExchangeStatusError", fmt.Sprintf("token exchange failed (status %d): %s", resp.StatusCode, string(body)))
 	}
 

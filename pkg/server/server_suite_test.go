@@ -19,6 +19,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/web"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -578,7 +579,12 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			// Valid config in HttpSecurity
 			validBuilder := &HttpSecurityBuilder{}
 			validCfg := &OAuth2AuthorizationServerConfig{
-				Settings: settingsDef,
+				Settings:              settingsDef,
+				ClientRepository:      clientRepo,
+				AuthorizationService:  authService,
+				TokenGenerator:        generator,
+				JWKSource:             km,
+				SecurityContextHolder: contextHolder,
 			}
 			validBuilder.AddCustomSecurityFilter("oAuth2AuthorizationServerFilter", validCfg)
 			validCtx := context.WithValue(context.Background(), PrototypeContextParentInstance, validBuilder.Build())
@@ -1221,6 +1227,560 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			hTokenExactMatch.SetFormValue("redirect_uri", registeredClient.RedirectURIs[0])
 			Expect(router.Execute(hTokenExactMatch)).To(Succeed())
 		})
+
+		It("tests InvalidateAuthorizationCode, SaveTokens, and untracked Remove in InMemoryOAuth2AuthorizationService", func() {
+			service := InMemoryOAuth2AuthorizationService{}.New()
+
+			// 1. InvalidateAuthorizationCode with nil AuthorizationCode
+			authNilCode := &OAuth2Authorization{
+				ID: "auth-nil-code",
+			}
+			service.SetAuthCodeForTest("nil-code", authNilCode)
+			_, err := service.InvalidateAuthorizationCode("nil-code")
+			Expect(err).To(HaveOccurred())
+
+			// 2. InvalidateAuthorizationCode already used
+			authUsedCode := &OAuth2Authorization{
+				ID: "auth-used-code",
+				AuthorizationCode: &AuthorizationCode{
+					Value:       "used-code",
+					Invalidated: true,
+					ExpiresAt:   time.Now().Add(5 * time.Minute),
+				},
+			}
+			Expect(service.Save(authUsedCode)).NotTo(HaveOccurred())
+			_, err = service.InvalidateAuthorizationCode("used-code")
+			Expect(err).To(HaveOccurred())
+
+			// 3. InvalidateAuthorizationCode expired
+			authExpiredCode := &OAuth2Authorization{
+				ID: "auth-expired-code",
+				AuthorizationCode: &AuthorizationCode{
+					Value:       "expired-code",
+					Invalidated: false,
+					ExpiresAt:   time.Now().Add(-5 * time.Minute),
+				},
+			}
+			Expect(service.Save(authExpiredCode)).NotTo(HaveOccurred())
+			_, err = service.InvalidateAuthorizationCode("expired-code")
+			Expect(err).To(HaveOccurred())
+
+			// 4. SaveTokens unknown ID
+			at := NewOAuth2AccessToken(TokenTypeBearer, "at-val", time.Now(), time.Now().Add(time.Hour), []string{"read"})
+			rt := NewOAuth2RefreshToken("rt-val", time.Now(), time.Now().Add(24*time.Hour))
+			err = service.SaveTokens("non-existent-auth-id", "", at, rt)
+			Expect(err).To(HaveOccurred())
+
+			// 5. SaveTokens expected old refresh token but auth has nil refresh token
+			authNoRT := &OAuth2Authorization{
+				ID: "auth-no-rt",
+			}
+			Expect(service.Save(authNoRT)).NotTo(HaveOccurred())
+			err = service.SaveTokens("auth-no-rt", "expected-rt", at, rt)
+			Expect(err).To(HaveOccurred())
+
+			// 6. SaveTokens expected old refresh token mismatch
+			authWithRT := &OAuth2Authorization{
+				ID:           "auth-with-rt",
+				RefreshToken: NewOAuth2RefreshToken("actual-rt", time.Now(), time.Now().Add(24*time.Hour)),
+			}
+			Expect(service.Save(authWithRT)).NotTo(HaveOccurred())
+			err = service.SaveTokens("auth-with-rt", "different-expected-rt", at, rt)
+			Expect(err).To(HaveOccurred())
+
+			// 7. Remove with untracked authorization (has tokens directly)
+			authDirect := &OAuth2Authorization{
+				ID: "auth-direct",
+				AuthorizationCode: &AuthorizationCode{
+					Value: "direct-code",
+				},
+				AccessToken:  at,
+				RefreshToken: rt,
+			}
+			Expect(service.Save(authDirect)).NotTo(HaveOccurred())
+			service.UntrackForTest(authDirect.ID)
+			Expect(service.Remove(authDirect)).NotTo(HaveOccurred())
+		})
+
+		It("tests JwtOAuth2TokenGenerator encoder error and default refresh token TTL", func() {
+			failingEncoder := &testMockFailingJwtEncoder{}
+			gen := JwtOAuth2TokenGenerator{}.New(failingEncoder, "https://issuer.example.com")
+			client := &RegisteredClient{
+				ID:                      "client-id",
+				ClientID:                "client-1",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeRefreshToken},
+				RefreshTokenTimeToLive:  0, // triggers default 30 days
+			}
+			auth := &OAuth2Authorization{
+				ID:            "auth-id",
+				PrincipalName: "user1",
+			}
+			_, _, err := gen.Generate(auth, client)
+			Expect(err).To(HaveOccurred())
+
+			// Success with default refresh token TTL
+			validGen := JwtOAuth2TokenGenerator{}.New(NewDefaultJwtEncoder(km), "https://issuer.example.com")
+			at, rt, err := validGen.Generate(auth, client)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(at).NotTo(BeNil())
+			Expect(rt).NotTo(BeNil())
+		})
+
+		It("tests OAuth2AuthorizationServerFilter WithContext error cases and defaults", func() {
+			filter := &OAuth2AuthorizationServerFilter{}
+
+			// 1. Parent context value is not HttpSecurity
+			ctxWrongParent := context.WithValue(context.Background(), PrototypeContextParentInstance, "not-http-sec")
+			err := filter.WithContext(ctxWrongParent)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("IllegalArgumentException"))
+
+			// 2. Parent HttpSecurity does not configure oAuth2AuthorizationServerFilter
+			httpSec := &HttpSecurity{}
+			ctxNoFilter := context.WithValue(context.Background(), PrototypeContextParentInstance, httpSec)
+			err = filter.WithContext(ctxNoFilter)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("IllegalArgumentException"))
+
+			// 3. Injected dependencies and default settings/generator
+			filterInjected := &OAuth2AuthorizationServerFilter{}
+			filterInjected.SetInjectedDepsForTest(clientRepo, contextHolder, km, nil, authService, nil)
+			err = filterInjected.WithContext(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			deps := filterInjected.GetDepsForTest()
+			Expect(deps.Settings).NotTo(BeNil())
+			Expect(deps.Settings.Issuer).To(Equal("http://localhost:8080"))
+			Expect(deps.TokenGenerator).NotTo(BeNil())
+		})
+
+		It("tests handleAuthorize scope validation, non-S256 PKCE, redirect_uri defaults, and unauthorized grant", func() {
+			authURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/authorize")
+			Expect(err).NotTo(HaveOccurred())
+
+			// 1. Client not authorized for authorization_code grant
+			ccOnlyClient := &RegisteredClient{
+				ID:                      "cc-only-id",
+				ClientID:                "cc-only-client",
+				ClientSecret:            "secret",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeClientCredentials},
+				RedirectURIs:            []string{"https://app.example.com/cb"},
+				Scopes:                  []string{"read"},
+			}
+			Expect(clientRepo.Save(ccOnlyClient)).NotTo(HaveOccurred())
+
+			hNoAuthCode := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hNoAuthCode.URL().RawQuery = "client_id=cc-only-client&response_type=code"
+			Expect(router.Execute(hNoAuthCode)).To(HaveOccurred())
+
+			// 2. Missing redirect_uri when client has multiple registered URIs
+			multiURIClient := &RegisteredClient{
+				ID:                      "multi-uri-id",
+				ClientID:                "multi-uri-client",
+				ClientSecret:            "secret",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeAuthorizationCode},
+				RedirectURIs:            []string{"https://app.example.com/cb1", "https://app.example.com/cb2"},
+				Scopes:                  []string{"read"},
+			}
+			Expect(clientRepo.Save(multiURIClient)).NotTo(HaveOccurred())
+
+			hMultiNoURI := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hMultiNoURI.URL().RawQuery = "client_id=multi-uri-client&response_type=code"
+			Expect(router.Execute(hMultiNoURI)).To(HaveOccurred())
+
+			// 3. Invalid redirect_uri (not in registered URIs)
+			hInvalidURI := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hInvalidURI.URL().RawQuery = "client_id=multi-uri-client&response_type=code&redirect_uri=https://evil.com/cb"
+			Expect(router.Execute(hInvalidURI)).To(HaveOccurred())
+
+			// Authenticate user
+			authUser := DefaultOAuth2User{}.New(
+				[]GrantedAuthority{Authority("ROLE_USER")},
+				map[string]any{"sub": "john_doe"},
+				"sub",
+			)
+			contextHolder.GetContext().SetAuthentication(
+				OAuth2AuthenticationToken{}.New(authUser, authUser.GetAuthorities(), "internal"),
+			)
+
+			// 4. PKCE code_challenge_method not S256
+			hPlainPkce := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hPlainPkce.URL().RawQuery = "client_id=my-spa-app&response_type=code&redirect_uri=" + url.QueryEscape(registeredClient.RedirectURIs[0]) + "&code_challenge=abc&code_challenge_method=plain"
+			Expect(router.Execute(hPlainPkce)).To(HaveOccurred())
+
+			// 5. Scope validation: unauthorized scope
+			hBadScope := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hBadScope.URL().RawQuery = "client_id=my-spa-app&response_type=code&redirect_uri=" + url.QueryEscape(registeredClient.RedirectURIs[0]) + "&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=openid+unauthorized_scope"
+			Expect(router.Execute(hBadScope)).To(HaveOccurred())
+
+			// 6. Scope validation: spaces and valid scopes
+			hGoodScope := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hGoodScope.URL().RawQuery = "client_id=my-spa-app&response_type=code&redirect_uri=" + url.QueryEscape(registeredClient.RedirectURIs[0]) + "&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&scope=+orders+++openid+"
+			errGood := router.Execute(hGoodScope)
+			Expect(errGood).To(HaveOccurred())
+			redirectEx := &DefaultSecurityFilterChainException{}
+			Expect(errors.As(errGood, &redirectEx)).To(BeTrue())
+			Expect(redirectEx.Action()).To(Equal(DefaultSecurityFilterAction{}.New().REDIRECT.Name()))
+
+			// 7. Missing redirect_uri when client has exactly 1 registered URI (defaults and succeeds)
+			singleURIClient := &RegisteredClient{
+				ID:                      "single-uri-id",
+				ClientID:                "single-uri-client",
+				ClientSecret:            "secret",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeAuthorizationCode},
+				RedirectURIs:            []string{"https://single.example.com/cb"},
+				Scopes:                  []string{"read"},
+				RequireProofKey:         false,
+			}
+			Expect(clientRepo.Save(singleURIClient)).NotTo(HaveOccurred())
+			hSingleDefault := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hSingleDefault.URL().RawQuery = "client_id=single-uri-client&response_type=code&scope=read"
+			errSingle := router.Execute(hSingleDefault)
+			Expect(errSingle).To(HaveOccurred())
+			Expect(errors.As(errSingle, &redirectEx)).To(BeTrue())
+			Expect(redirectEx.Action()).To(Equal(DefaultSecurityFilterAction{}.New().REDIRECT.Name()))
+
+			// 8. Malformed redirect_uri returns 400
+			malformedURIClient := &RegisteredClient{
+				ID:                      "malformed-uri-id",
+				ClientID:                "malformed-uri-client",
+				ClientSecret:            "secret",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeAuthorizationCode},
+				RedirectURIs:            []string{"https://single.example.com/cb\x7f"},
+				Scopes:                  []string{"read"},
+				RequireProofKey:         false,
+			}
+			Expect(clientRepo.Save(malformedURIClient)).NotTo(HaveOccurred())
+			hMalformed := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hMalformed.URL().RawQuery = "client_id=malformed-uri-client&response_type=code&scope=read"
+			Expect(router.Execute(hMalformed)).To(HaveOccurred())
+
+			// 9. Failed save of authorization returns 500
+			failingSaveAuthSvc := &testMockFailingAuthorizationService{
+				OAuth2AuthorizationService: authService,
+				failSave:                   true,
+			}
+			failingSaveFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingSaveAuthSvc, generator, km, contextHolder)
+			failingSaveRouter := NewMockSecurityRouter()
+			failingSaveFilter.RegisterSecurityEndpoint(failingSaveRouter)
+			hAuthSaveFail := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			hAuthSaveFail.URL().RawQuery = "client_id=single-uri-client&response_type=code&scope=read"
+			Expect(failingSaveRouter.Execute(hAuthSaveFail)).To(HaveOccurred())
+		})
+
+		It("tests authenticateClient malformed basic auth and missing credentials", func() {
+			tokenURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/token")
+			Expect(err).NotTo(HaveOccurred())
+
+			// 1. Basic auth with invalid base64
+			hBadB64 := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hBadB64.SetHeader("Authorization", "Basic !!!not-valid-base64!!!")
+			hBadB64.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hBadB64)).To(HaveOccurred())
+
+			// 2. Basic auth with no colon
+			hNoColon := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hNoColon.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("justusername")))
+			hNoColon.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hNoColon)).To(HaveOccurred())
+
+			// 3. Missing client_id entirely
+			hNoClient := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hNoClient.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hNoClient)).To(HaveOccurred())
+
+			// 4. Confidential client with empty secret
+			hEmptySecret := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hEmptySecret.SetFormValue("client_id", "my-spa-app")
+			hEmptySecret.SetFormValue("client_secret", "")
+			hEmptySecret.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hEmptySecret)).To(HaveOccurred())
+		})
+
+		It("tests handleToken grant restrictions, client_credentials errors, and refresh_token errors", func() {
+			tokenURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/token")
+			Expect(err).NotTo(HaveOccurred())
+
+			// 1. Public client requesting unauthorized grant (client_credentials)
+			publicClient := &RegisteredClient{
+				ID:                          "public-client-id",
+				ClientID:                    "public-client",
+				ClientAuthenticationMethods: []ClientAuthenticationMethod{ClientAuthMethodNone},
+				AuthorizationGrantTypes:     []AuthorizationGrantType{GrantTypeAuthorizationCode, GrantTypeRefreshToken},
+				RedirectURIs:                []string{"https://public.example.com/cb"},
+				Scopes:                      []string{"read"},
+			}
+			Expect(clientRepo.Save(publicClient)).NotTo(HaveOccurred())
+
+			hPubCC := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hPubCC.SetFormValue("client_id", "public-client")
+			hPubCC.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hPubCC)).To(HaveOccurred())
+
+			// 2. Unsupported grant type
+			hUnsupp := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hUnsupp.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hUnsupp.SetFormValue("grant_type", "password")
+			Expect(router.Execute(hUnsupp)).To(HaveOccurred())
+
+			// 3. handleAuthorizationCodeGrant client ID mismatch
+			diffClientAuth := &OAuth2Authorization{
+				ID:                 "diff-client-auth",
+				RegisteredClientID: "some-other-client-id",
+				PrincipalName:      "user-diff",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "diff-client-code",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					RedirectURISupplied: true,
+				},
+			}
+			Expect(authService.Save(diffClientAuth)).NotTo(HaveOccurred())
+			hDiffClient := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hDiffClient.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hDiffClient.SetFormValue("grant_type", "authorization_code")
+			hDiffClient.SetFormValue("code", "diff-client-code")
+			hDiffClient.SetFormValue("redirect_uri", registeredClient.RedirectURIs[0])
+			Expect(router.Execute(hDiffClient)).To(HaveOccurred())
+
+			// 4. handleAuthorizationCodeGrant with failing token generator
+			failingGenFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, authService, &testMockFailingTokenGenerator{}, km, contextHolder)
+			failingGenRouter := NewMockSecurityRouter()
+			failingGenFilter.RegisterSecurityEndpoint(failingGenRouter)
+
+			codeForFailGen := &OAuth2Authorization{
+				ID:                 "fail-gen-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-fail-gen",
+				AuthorizationCode: &AuthorizationCode{
+					Value:               "fail-gen-code",
+					IssuedAt:            time.Now(),
+					ExpiresAt:           time.Now().Add(5 * time.Minute),
+					RedirectURI:         registeredClient.RedirectURIs[0],
+					RedirectURISupplied: true,
+				},
+			}
+			Expect(authService.Save(codeForFailGen)).NotTo(HaveOccurred())
+			hFailGen := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hFailGen.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hFailGen.SetFormValue("grant_type", "authorization_code")
+			hFailGen.SetFormValue("code", "fail-gen-code")
+			hFailGen.SetFormValue("redirect_uri", registeredClient.RedirectURIs[0])
+			Expect(failingGenRouter.Execute(hFailGen)).To(HaveOccurred())
+
+			// 5. handleClientCredentialsGrant client not authorized
+			noCCClient := &RegisteredClient{
+				ID:                      "no-cc-id",
+				ClientID:                "no-cc-client",
+				ClientSecret:            "secret",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeAuthorizationCode},
+				RedirectURIs:            []string{"https://app.example.com/cb"},
+			}
+			Expect(clientRepo.Save(noCCClient)).NotTo(HaveOccurred())
+			hNoCC := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hNoCC.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("no-cc-client:secret")))
+			hNoCC.SetFormValue("grant_type", "client_credentials")
+			Expect(router.Execute(hNoCC)).To(HaveOccurred())
+
+			// 6. handleClientCredentialsGrant failing token generator
+			hCCFailGen := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hCCFailGen.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hCCFailGen.SetFormValue("grant_type", "client_credentials")
+			Expect(failingGenRouter.Execute(hCCFailGen)).To(HaveOccurred())
+
+			// 7. handleRefreshTokenGrant client not registered for refresh_token
+			noRTClient := &RegisteredClient{
+				ID:                      "no-rt-id",
+				ClientID:                "no-rt-client",
+				ClientSecret:            "secret",
+				AuthorizationGrantTypes: []AuthorizationGrantType{GrantTypeClientCredentials},
+			}
+			Expect(clientRepo.Save(noRTClient)).NotTo(HaveOccurred())
+			hNoRT := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hNoRT.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("no-rt-client:secret")))
+			hNoRT.SetFormValue("grant_type", "refresh_token")
+			hNoRT.SetFormValue("refresh_token", "some-rt")
+			Expect(router.Execute(hNoRT)).To(HaveOccurred())
+
+			// 8. handleRefreshTokenGrant invalid / unknown refresh token
+			hBadRT := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hBadRT.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hBadRT.SetFormValue("grant_type", "refresh_token")
+			hBadRT.SetFormValue("refresh_token", "non-existent-rt")
+			Expect(router.Execute(hBadRT)).To(HaveOccurred())
+
+			// 9. handleRefreshTokenGrant client ID mismatch
+			diffClientRTAuth := &OAuth2Authorization{
+				ID:                 "diff-client-rt-auth",
+				RegisteredClientID: "other-client-uuid",
+				PrincipalName:      "user-rt",
+				RefreshToken:       NewOAuth2RefreshToken("diff-client-rt", time.Now(), time.Now().Add(time.Hour)),
+			}
+			Expect(authService.Save(diffClientRTAuth)).NotTo(HaveOccurred())
+			hDiffClientRT := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hDiffClientRT.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hDiffClientRT.SetFormValue("grant_type", "refresh_token")
+			hDiffClientRT.SetFormValue("refresh_token", "diff-client-rt")
+			Expect(router.Execute(hDiffClientRT)).To(HaveOccurred())
+
+			// 10. handleRefreshTokenGrant failing token generator
+			rtForFailGen := &OAuth2Authorization{
+				ID:                 "rt-fail-gen-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-rt",
+				RefreshToken:       NewOAuth2RefreshToken("rt-fail-gen-val", time.Now(), time.Now().Add(time.Hour)),
+			}
+			Expect(authService.Save(rtForFailGen)).NotTo(HaveOccurred())
+			hRTFailGen := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hRTFailGen.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRTFailGen.SetFormValue("grant_type", "refresh_token")
+			hRTFailGen.SetFormValue("refresh_token", "rt-fail-gen-val")
+			Expect(failingGenRouter.Execute(hRTFailGen)).To(HaveOccurred())
+
+			// 11. handleRefreshTokenGrant failing SaveTokens
+			failingSaveTokensAuthSvc := &testMockFailingSaveTokensAuthService{
+				OAuth2AuthorizationService: authService,
+			}
+			failingSaveTokensFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingSaveTokensAuthSvc, generator, km, contextHolder)
+			failingSaveTokensRouter := NewMockSecurityRouter()
+			failingSaveTokensFilter.RegisterSecurityEndpoint(failingSaveTokensRouter)
+
+			rtForFailSave := &OAuth2Authorization{
+				ID:                 "rt-fail-save-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-rt",
+				RefreshToken:       NewOAuth2RefreshToken("rt-fail-save-val", time.Now(), time.Now().Add(time.Hour)),
+			}
+			Expect(authService.Save(rtForFailSave)).NotTo(HaveOccurred())
+			hRTFailSave := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hRTFailSave.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRTFailSave.SetFormValue("grant_type", "refresh_token")
+			hRTFailSave.SetFormValue("refresh_token", "rt-fail-save-val")
+			Expect(failingSaveTokensRouter.Execute(hRTFailSave)).To(HaveOccurred())
+
+			// 12. handleRefreshTokenGrant with generator returning nil refresh token (outRefreshToken defaults to auth.RefreshToken)
+			now := time.Now()
+			atForNilRT := NewOAuth2AccessToken(TokenTypeBearer, "nil-rt-at", now, now.Add(time.Hour), []string{"read"})
+			nilRTGen := &testMockNilRefreshTokenGenerator{accessToken: atForNilRT}
+			nilRTFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, authService, nilRTGen, km, contextHolder)
+			nilRTRouter := NewMockSecurityRouter()
+			nilRTFilter.RegisterSecurityEndpoint(nilRTRouter)
+
+			rtForNilRT := &OAuth2Authorization{
+				ID:                 "rt-nil-rt-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-rt",
+				RefreshToken:       NewOAuth2RefreshToken("nil-rt-val", time.Now(), time.Now().Add(time.Hour)),
+			}
+			Expect(authService.Save(rtForNilRT)).NotTo(HaveOccurred())
+			hNilRT := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			hNilRT.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hNilRT.SetFormValue("grant_type", "refresh_token")
+			hNilRT.SetFormValue("refresh_token", "nil-rt-val")
+			Expect(nilRTRouter.Execute(hNilRT)).To(Succeed())
+		})
+
+		It("tests handleJWKS error, handleIntrospect with unknown client ID, and handleRevoke for refresh token and different client", func() {
+			// 1. handleJWKS error
+			failingJWKSFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, authService, generator, &testMockFailingJWKSource{}, contextHolder)
+			failingJWKSRouter := NewMockSecurityRouter()
+			failingJWKSFilter.RegisterSecurityEndpoint(failingJWKSRouter)
+
+			jwksURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/jwks")
+			Expect(err).NotTo(HaveOccurred())
+			hJWKSFail := NewMockSecurityHandler(HttpMethods.GET, jwksURI)
+			Expect(failingJWKSRouter.Execute(hJWKSFail)).To(HaveOccurred())
+
+			// 2. handleIntrospect when clientRepo fails on RegisteredClientID
+			now := time.Now()
+			atUnknownClient := NewOAuth2AccessToken(TokenTypeBearer, "intro-unknown-client-at", now, now.Add(time.Hour), []string{"read"})
+			authUnknownClient := &OAuth2Authorization{
+				ID:                 "intro-unknown-client-auth",
+				RegisteredClientID: "non-existent-client-id",
+				PrincipalName:      "user-unknown",
+				AccessToken:        atUnknownClient,
+			}
+			Expect(authService.Save(authUnknownClient)).NotTo(HaveOccurred())
+
+			introspectURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/introspect")
+			Expect(err).NotTo(HaveOccurred())
+			hIntroUnknown := NewMockSecurityHandler(HttpMethods.POST, introspectURI)
+			hIntroUnknown.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hIntroUnknown.SetFormValue("token", "intro-unknown-client-at")
+			Expect(router.Execute(hIntroUnknown)).To(Succeed())
+			var introResp map[string]any
+			Expect(json.Unmarshal(hIntroUnknown.Res.Body.Bytes(), &introResp)).To(Succeed())
+			Expect(introResp["active"]).To(BeTrue())
+			Expect(introResp["client_id"]).To(Equal("non-existent-client-id"))
+
+			// 3. handleRevoke for refresh token
+			rtRevoke := NewOAuth2RefreshToken("revoke-rt-val", now, now.Add(24*time.Hour))
+			authRevokeRT := &OAuth2Authorization{
+				ID:                 "revoke-rt-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-revoke-rt",
+				RefreshToken:       rtRevoke,
+			}
+			Expect(authService.Save(authRevokeRT)).NotTo(HaveOccurred())
+
+			revokeURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/revoke")
+			Expect(err).NotTo(HaveOccurred())
+			hRevokeRT := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeRT.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeRT.SetFormValue("token", "revoke-rt-val")
+			Expect(router.Execute(hRevokeRT)).To(Succeed())
+			Expect(hRevokeRT.Res.Body.String()).To(Equal("{}"))
+
+			// 4. handleRevoke for token belonging to a different client (no-op, succeeds)
+			rtOtherClient := NewOAuth2RefreshToken("other-client-rt-val", now, now.Add(24*time.Hour))
+			authOtherClient := &OAuth2Authorization{
+				ID:                 "other-client-auth",
+				RegisteredClientID: "other-client-id",
+				PrincipalName:      "user-other",
+				RefreshToken:       rtOtherClient,
+			}
+			Expect(authService.Save(authOtherClient)).NotTo(HaveOccurred())
+			hRevokeOther := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeOther.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeOther.SetFormValue("token", "other-client-rt-val")
+			Expect(router.Execute(hRevokeOther)).To(Succeed())
+
+			// 5. handleRevoke when FindByToken fails for refresh_token
+			failingRTFindAuthSvc := &testMockFailingAuthorizationService{
+				OAuth2AuthorizationService: authService,
+				failFindByRefreshTokenOnly: true,
+			}
+			failingRTFindFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingRTFindAuthSvc, generator, km, contextHolder)
+			failingRTFindRouter := NewMockSecurityRouter()
+			failingRTFindFilter.RegisterSecurityEndpoint(failingRTFindRouter)
+
+			hRevokeRTFindFail := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeRTFindFail.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeRTFindFail.SetFormValue("token", "non-existent-access-token")
+			Expect(failingRTFindRouter.Execute(hRevokeRTFindFail)).To(HaveOccurred())
+
+			// 6. handleRevoke when Remove fails for refresh_token
+			rtRemoveFailAuth := &OAuth2Authorization{
+				ID:                 "rt-rm-fail-auth",
+				RegisteredClientID: registeredClient.ID,
+				PrincipalName:      "user-rt",
+				RefreshToken:       NewOAuth2RefreshToken("rt-rm-fail-val", time.Now(), time.Now().Add(time.Hour)),
+			}
+			Expect(authService.Save(rtRemoveFailAuth)).NotTo(HaveOccurred())
+
+			failingRTRemoveAuthSvc := &testMockFailingAuthorizationService{
+				OAuth2AuthorizationService: authService,
+				failRemove:                 true,
+			}
+			failingRTRemoveFilter := OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, failingRTRemoveAuthSvc, generator, km, contextHolder)
+			failingRTRemoveRouter := NewMockSecurityRouter()
+			failingRTRemoveFilter.RegisterSecurityEndpoint(failingRTRemoveRouter)
+
+			hRevokeRTRmFail := NewMockSecurityHandler(HttpMethods.POST, revokeURI)
+			hRevokeRTRmFail.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			hRevokeRTRmFail.SetFormValue("token", "rt-rm-fail-val")
+			Expect(failingRTRemoveRouter.Execute(hRevokeRTRmFail)).To(HaveOccurred())
+		})
 	})
 })
 
@@ -1247,9 +1807,10 @@ func (this *testMockFailingJWKSource) GetVerificationKey(_ string) (pubKey any, 
 // testMockFailingAuthorizationService wraps an OAuth2AuthorizationService to simulate storage failures on specific operations.
 type testMockFailingAuthorizationService struct {
 	OAuth2AuthorizationService
-	failSave        bool
-	failFindByToken bool
-	failRemove      bool
+	failSave                   bool
+	failFindByToken            bool
+	failFindByRefreshTokenOnly bool
+	failRemove                 bool
 }
 
 // Save returns a simulated storage error if failSave is true, or delegates to the embedded service.
@@ -1265,6 +1826,9 @@ func (this *testMockFailingAuthorizationService) FindByToken(token, tokenType st
 	if this.failFindByToken {
 		return nil, NewError("StorageError", "database lookup failure")
 	}
+	if this.failFindByRefreshTokenOnly && tokenType == "refresh_token" {
+		return nil, NewError("StorageError", "database lookup failure")
+	}
 	return this.OAuth2AuthorizationService.FindByToken(token, tokenType)
 }
 
@@ -1274,4 +1838,36 @@ func (this *testMockFailingAuthorizationService) Remove(auth *OAuth2Authorizatio
 		return NewError("StorageError", "database delete failure")
 	}
 	return this.OAuth2AuthorizationService.Remove(auth)
+}
+
+// testMockFailingSaveTokensAuthService simulates failures in SaveTokens.
+type testMockFailingSaveTokensAuthService struct {
+	OAuth2AuthorizationService
+}
+
+func (this *testMockFailingSaveTokensAuthService) SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error {
+	return NewError("StorageError", "database write failure")
+}
+
+// testMockFailingTokenGenerator always returns an error when generating tokens.
+type testMockFailingTokenGenerator struct{}
+
+func (this *testMockFailingTokenGenerator) Generate(_ *OAuth2Authorization, _ *RegisteredClient) (*OAuth2AccessToken, *OAuth2RefreshToken, Error) {
+	return nil, nil, NewError("TokenGenError", "token generation failed")
+}
+
+// testMockFailingJwtEncoder always returns an error.
+type testMockFailingJwtEncoder struct{}
+
+func (this *testMockFailingJwtEncoder) Encode(_ *JwtEncoderParameters) (*Jwt, Error) {
+	return nil, NewError("JwtEncodeError", "failed to encode jwt")
+}
+
+// testMockNilRefreshTokenGenerator returns a nil refresh token to test non-rotated refresh token branches.
+type testMockNilRefreshTokenGenerator struct {
+	accessToken *OAuth2AccessToken
+}
+
+func (this *testMockNilRefreshTokenGenerator) Generate(_ *OAuth2Authorization, _ *RegisteredClient) (*OAuth2AccessToken, *OAuth2RefreshToken, Error) {
+	return this.accessToken, nil, nil
 }

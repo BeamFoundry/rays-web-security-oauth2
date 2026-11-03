@@ -117,3 +117,13 @@ func EffectivePortForTest(u *url.URL) string {
 func ParseIntegerTimestampForTest(val any) (int64, bool) {
 	return parseIntegerTimestamp(val)
 }
+
+// IsLoopbackHostForTest exposes isLoopbackHost for unit testing loopback host checking.
+func IsLoopbackHostForTest(host string) bool {
+	return isLoopbackHost(host)
+}
+
+// ClearHttpClientForTest clears the httpClient on NimbusOpaqueTokenIntrospector for testing.
+func (this *NimbusOpaqueTokenIntrospector) ClearHttpClientForTest() {
+	this.httpClient = nil
+}

@@ -56,3 +56,17 @@ func (this *OAuth2AuthorizationServerFilter) GetDepsForTest() *ServerFilterDeps 
 		Settings:       this.settings,
 	}
 }
+
+// UntrackForTest removes the tracked ID from InMemoryOAuth2AuthorizationService for unit testing fallback removal branches.
+func (this *InMemoryOAuth2AuthorizationService) UntrackForTest(id string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	delete(this.tracked, id)
+}
+
+// SetAuthCodeForTest sets an authorization directly into byAuthCode for unit testing edge cases.
+func (this *InMemoryOAuth2AuthorizationService) SetAuthCodeForTest(code string, auth *OAuth2Authorization) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.byAuthCode[code] = auth
+}

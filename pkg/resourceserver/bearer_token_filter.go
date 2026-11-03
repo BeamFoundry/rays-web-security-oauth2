@@ -126,7 +126,7 @@ func (this *BearerTokenAuthenticationFilter) WithOpaqueTokenIntrospector(introsp
 	return this
 }
 
-// Config returns the effective BearerTokenConfig for this filter.
+// Config returns the supplied BearerTokenConfig or a lazily created snapshot of the filter's fields, not necessarily the effective configuration after WithContext injects dependencies.
 func (this *BearerTokenAuthenticationFilter) Config() *BearerTokenConfig {
 	if this.config == nil {
 		this.config = &BearerTokenConfig{

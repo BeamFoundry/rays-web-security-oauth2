@@ -47,7 +47,7 @@ type JWKSource interface {
 	GetJWKSet() (*JWKSet, Error)
 	// GetSigningKey returns the active key ID, private key, and signing algorithm.
 	GetSigningKey() (kid string, privateKey any, alg string, err Error)
-	// GetVerificationKey returns the public verification key and algorithm for the specified key ID.
+	// GetVerificationKey returns the verification key and algorithm for the specified key ID: a public key for asymmetric algorithms (such as RS256 or ES256) or a shared secret for symmetric algorithms (such as HS256). Shared secrets must remain confidential.
 	GetVerificationKey(kid string) (publicKey any, alg string, err Error)
 }
 

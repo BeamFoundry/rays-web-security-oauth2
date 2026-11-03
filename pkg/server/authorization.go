@@ -42,13 +42,14 @@ type OAuth2AuthorizationService interface {
 	Remove(authorization *OAuth2Authorization) Error
 	// FindByID retrieves an OAuth2Authorization by its unique identifier.
 	FindByID(id string) (*OAuth2Authorization, Error)
-	// FindByToken retrieves an OAuth2Authorization by a token value and token type hint ("code", "access_token", or "refresh_token").
+	// FindByToken retrieves an OAuth2Authorization by a token value and required tokenType selector ("code", "access_token", or "refresh_token").
 	FindByToken(token, tokenType string) (*OAuth2Authorization, Error)
 	// InvalidateAuthorizationCode atomically marks an authorization code as used and returns its OAuth2Authorization.
 	InvalidateAuthorizationCode(code string) (*OAuth2Authorization, Error)
 	// ConsumeRefreshToken atomically marks a refresh token as consumed and returns its OAuth2Authorization.
 	ConsumeRefreshToken(token string) (*OAuth2Authorization, Error)
 	// SaveTokens atomically updates the access and refresh tokens for an authorization while verifying the previous refresh token.
+	// Passing an empty expectedOldRefreshToken disables the previous-refresh-token comparison; callers must not rely on the comparison when passing an empty value.
 	SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error
 }
 
@@ -59,7 +60,8 @@ type trackedTokens struct {
 	refreshToken string
 }
 
-// InMemoryOAuth2AuthorizationService stores authorizations in memory
+// InMemoryOAuth2AuthorizationService stores authorizations in memory.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of authorization objects shared with the repository.
 type InMemoryOAuth2AuthorizationService struct {
 	mu             *sync.RWMutex
 	byID           map[string]*OAuth2Authorization
@@ -69,7 +71,8 @@ type InMemoryOAuth2AuthorizationService struct {
 	tracked        map[string]trackedTokens
 }
 
-// New creates a new thread-safe InMemoryOAuth2AuthorizationService.
+// New creates a new InMemoryOAuth2AuthorizationService.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of authorization objects shared with the repository.
 func (this InMemoryOAuth2AuthorizationService) New() *InMemoryOAuth2AuthorizationService {
 	this.mu = &sync.RWMutex{}
 	this.byID = make(map[string]*OAuth2Authorization)
@@ -81,6 +84,7 @@ func (this InMemoryOAuth2AuthorizationService) New() *InMemoryOAuth2Authorizatio
 }
 
 // NewInMemoryOAuth2AuthorizationService creates a new InMemoryOAuth2AuthorizationService.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of authorization objects shared with the repository.
 func NewInMemoryOAuth2AuthorizationService() *InMemoryOAuth2AuthorizationService {
 	return InMemoryOAuth2AuthorizationService{}.New()
 }
@@ -225,7 +229,8 @@ func (this *InMemoryOAuth2AuthorizationService) ConsumeRefreshToken(token string
 	return auth, nil
 }
 
-// SaveTokens updates the access and refresh tokens for the specified authorization ID after verifying the expected old refresh token.
+// SaveTokens atomically updates the access and refresh tokens for the specified authorization ID while verifying the previous refresh token.
+// Passing an empty expectedOldRefreshToken disables the previous-refresh-token comparison; callers must not rely on the comparison when passing an empty value.
 func (this *InMemoryOAuth2AuthorizationService) SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -259,7 +264,7 @@ func (this *InMemoryOAuth2AuthorizationService) FindByID(id string) (*OAuth2Auth
 	return auth, nil
 }
 
-// FindByToken retrieves an OAuth2Authorization by token value and token type ("code", "access_token", or "refresh_token").
+// FindByToken retrieves an OAuth2Authorization by token value and required tokenType selector ("code", "access_token", or "refresh_token").
 func (this *InMemoryOAuth2AuthorizationService) FindByToken(token, tokenType string) (*OAuth2Authorization, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()

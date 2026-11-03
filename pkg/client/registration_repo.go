@@ -13,13 +13,15 @@ type ClientRegistrationRepository interface {
 	FindByRegistrationID(registrationID string) (*ClientRegistration, Error)
 }
 
-// InMemoryClientRegistrationRepository stores client registrations in memory
+// InMemoryClientRegistrationRepository stores client registrations in memory.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of ClientRegistration objects shared with the repository.
 type InMemoryClientRegistrationRepository struct {
 	mu            *sync.RWMutex
 	registrations map[string]*ClientRegistration
 }
 
-// New creates a new thread-safe InMemoryClientRegistrationRepository populated with the given client registrations.
+// New creates a new InMemoryClientRegistrationRepository populated with the given client registrations.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of ClientRegistration objects shared with the repository.
 func (this InMemoryClientRegistrationRepository) New(registrations ...*ClientRegistration) *InMemoryClientRegistrationRepository {
 	this.mu = &sync.RWMutex{}
 	m := make(map[string]*ClientRegistration)
@@ -33,6 +35,7 @@ func (this InMemoryClientRegistrationRepository) New(registrations ...*ClientReg
 }
 
 // NewInMemoryClientRegistrationRepository creates a new InMemoryClientRegistrationRepository populated with the given client registrations.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of ClientRegistration objects shared with the repository.
 func NewInMemoryClientRegistrationRepository(registrations ...*ClientRegistration) *InMemoryClientRegistrationRepository {
 	return InMemoryClientRegistrationRepository{}.New(registrations...)
 }

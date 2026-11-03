@@ -41,6 +41,7 @@ func (this *DefaultJwtAuthenticationConverter) WithPrincipalClaimName(name strin
 }
 
 // WithAuthorityPrefix sets the prefix prepended to extracted authorities.
+// Values from "scope" and "scp" claims always receive the configured prefix (when non-empty), whereas role-style claim values from other authority claims already beginning with "ROLE_" or "SCOPE_" pass through unchanged.
 func (this *DefaultJwtAuthenticationConverter) WithAuthorityPrefix(prefix string) *DefaultJwtAuthenticationConverter {
 	this.authorityPrefix = prefix
 	return this

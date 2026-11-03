@@ -87,7 +87,7 @@ func NewOAuth2AuthorizationServerFilter(
 	return OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, authService, tokenGen, jwkSource, contextHolder)
 }
 
-// Config returns the effective OAuth2AuthorizationServerConfig for this filter.
+// Config returns the supplied OAuth2AuthorizationServerConfig or a lazily created snapshot of the filter's fields, not necessarily the effective configuration after WithContext injects dependencies.
 func (this *OAuth2AuthorizationServerFilter) Config() *OAuth2AuthorizationServerConfig {
 	if this.config == nil {
 		this.config = &OAuth2AuthorizationServerConfig{

@@ -88,6 +88,7 @@ func (this *NimbusOpaqueTokenIntrospector) WithHTTPClient(client *http.Client) *
 }
 
 // WithAuthorityPrefix sets the prefix prepended to authorities extracted from the introspection response.
+// Values from "scope" and "scp" claims always receive the configured prefix (when non-empty), whereas role-style claim values from other authority claims already beginning with "ROLE_" or "SCOPE_" pass through unchanged.
 func (this *NimbusOpaqueTokenIntrospector) WithAuthorityPrefix(prefix string) *NimbusOpaqueTokenIntrospector {
 	this.authorityPrefix = prefix
 	return this

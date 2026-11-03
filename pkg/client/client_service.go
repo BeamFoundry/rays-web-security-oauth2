@@ -24,13 +24,15 @@ type authorizedClientKey struct {
 	principalName  string
 }
 
-// InMemoryOAuth2AuthorizedClientService is an in-memory implementation of OAuth2AuthorizedClientService
+// InMemoryOAuth2AuthorizedClientService is an in-memory implementation of OAuth2AuthorizedClientService.
+// Service operations are synchronized, but callers must synchronize concurrent access to or mutation of OAuth2AuthorizedClient objects shared with the service.
 type InMemoryOAuth2AuthorizedClientService struct {
 	mu      *sync.RWMutex
 	clients map[authorizedClientKey]*OAuth2AuthorizedClient
 }
 
-// New creates a new thread-safe InMemoryOAuth2AuthorizedClientService.
+// New creates a new InMemoryOAuth2AuthorizedClientService.
+// Service operations are synchronized, but callers must synchronize concurrent access to or mutation of OAuth2AuthorizedClient objects shared with the service.
 func (this InMemoryOAuth2AuthorizedClientService) New() *InMemoryOAuth2AuthorizedClientService {
 	this.mu = &sync.RWMutex{}
 	this.clients = make(map[authorizedClientKey]*OAuth2AuthorizedClient)
@@ -38,6 +40,7 @@ func (this InMemoryOAuth2AuthorizedClientService) New() *InMemoryOAuth2Authorize
 }
 
 // NewInMemoryOAuth2AuthorizedClientService creates a new InMemoryOAuth2AuthorizedClientService.
+// Service operations are synchronized, but callers must synchronize concurrent access to or mutation of OAuth2AuthorizedClient objects shared with the service.
 func NewInMemoryOAuth2AuthorizedClientService() *InMemoryOAuth2AuthorizedClientService {
 	return InMemoryOAuth2AuthorizedClientService{}.New()
 }

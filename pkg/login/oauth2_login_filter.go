@@ -106,7 +106,7 @@ func (this *OAuth2LoginAuthenticationFilter) WithTrustedProxy(trusted bool) *OAu
 	return this
 }
 
-// Config returns the effective OAuth2LoginConfig for this filter.
+// Config returns the supplied OAuth2LoginConfig or a lazily created snapshot of the filter's fields, not necessarily the effective configuration after WithContext injects dependencies.
 func (this *OAuth2LoginAuthenticationFilter) Config() *OAuth2LoginConfig {
 	if this.config == nil {
 		this.config = &OAuth2LoginConfig{

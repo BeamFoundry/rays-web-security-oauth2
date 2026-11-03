@@ -22,11 +22,14 @@ const (
 	ClientAuthMethodBasic ClientAuthenticationMethod = "client_secret_basic"
 	// ClientAuthMethodPost authenticates the client by including credentials in the HTTP POST request body.
 	ClientAuthMethodPost ClientAuthenticationMethod = "client_secret_post"
-	// ClientAuthMethodNone indicates a public client that does not use a client secret.
+	// ClientAuthMethodNone represents the "none" authentication method for public clients without a client secret.
+	// Note: built-in authorization-code, refresh-token, and client-credentials token exchanges use HTTP Basic authentication for this method rather than implementing public-client (unauthenticated) protocol authentication behavior.
 	ClientAuthMethodNone ClientAuthenticationMethod = "none" // PKCE public client
-	// ClientAuthMethodSecret authenticates the client using a JWT signed with a shared client secret.
+	// ClientAuthMethodSecret represents the "client_secret_jwt" authentication method (JWT assertion signed with a shared client secret).
+	// Note: built-in authorization-code, refresh-token, and client-credentials token exchanges use HTTP Basic authentication for this method rather than implementing "client_secret_jwt" protocol authentication behavior.
 	ClientAuthMethodSecret ClientAuthenticationMethod = "client_secret_jwt"
-	// ClientAuthMethodKey authenticates the client using a JWT signed with an asymmetric private key.
+	// ClientAuthMethodKey represents the "private_key_jwt" authentication method (JWT assertion signed with an asymmetric private key).
+	// Note: built-in authorization-code, refresh-token, and client-credentials token exchanges use HTTP Basic authentication for this method rather than implementing "private_key_jwt" protocol authentication behavior.
 	ClientAuthMethodKey ClientAuthenticationMethod = "private_key_jwt"
 )
 

@@ -33,14 +33,16 @@ type RegisteredClientRepository interface {
 	Save(client *RegisteredClient) Error
 }
 
-// InMemoryRegisteredClientRepository stores registered clients in memory
+// InMemoryRegisteredClientRepository stores registered clients in memory.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of client objects shared with the repository.
 type InMemoryRegisteredClientRepository struct {
 	mu         *sync.RWMutex
 	byID       map[string]*RegisteredClient
 	byClientID map[string]*RegisteredClient
 }
 
-// New creates a new thread-safe InMemoryRegisteredClientRepository populated with the given clients.
+// New creates a new InMemoryRegisteredClientRepository populated with the given clients.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of client objects shared with the repository.
 func (this InMemoryRegisteredClientRepository) New(clients ...*RegisteredClient) *InMemoryRegisteredClientRepository {
 	this.mu = &sync.RWMutex{}
 	this.byID = make(map[string]*RegisteredClient)
@@ -55,6 +57,7 @@ func (this InMemoryRegisteredClientRepository) New(clients ...*RegisteredClient)
 }
 
 // NewInMemoryRegisteredClientRepository creates a new InMemoryRegisteredClientRepository populated with the given clients.
+// Repository operations are synchronized, but callers must synchronize concurrent access to or mutation of client objects shared with the repository.
 func NewInMemoryRegisteredClientRepository(clients ...*RegisteredClient) *InMemoryRegisteredClientRepository {
 	return InMemoryRegisteredClientRepository{}.New(clients...)
 }

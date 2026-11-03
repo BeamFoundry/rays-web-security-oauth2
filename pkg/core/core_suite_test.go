@@ -196,5 +196,20 @@ var _ = Describe("OAuth2AuthenticationException", func() {
 		// NewOAuth2AuthenticationException
 		ex := NewOAuth2AuthenticationException(OAuth2Error{ErrorCode: "err"}, loginAuth)
 		Expect(ex).To(HaveOccurred())
+
+		// DefaultOAuth2AuthenticatedPrincipal
+		p1 := DefaultOAuth2AuthenticatedPrincipal{}.New(
+			"prin-1",
+			map[string]any{"sub": "prin-1", "scope": "read"},
+			[]GrantedAuthority{Authority("SCOPE_read")},
+		)
+		Expect(p1.GetName()).To(Equal("prin-1"))
+		Expect(p1.GetAttributes()).To(HaveKeyWithValue("scope", "read"))
+		Expect(p1.GetAuthorities()).To(ConsistOf(Authority("SCOPE_read")))
+
+		p2 := NewDefaultOAuth2AuthenticatedPrincipal("prin-2", map[string]any{"k": "v"}, nil)
+		Expect(p2.GetName()).To(Equal("prin-2"))
+		Expect(p2.GetAttributes()).To(HaveKeyWithValue("k", "v"))
+		Expect(p2.GetAuthorities()).To(BeEmpty())
 	})
 })

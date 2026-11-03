@@ -3,6 +3,7 @@ package resourceserver
 import (
 	"encoding/gob"
 
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security/pkg/auth"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
@@ -78,7 +79,68 @@ func (this *JwtAuthenticationToken) GetCredentials() any {
 	return ""
 }
 
+// BearerTokenAuthentication represents an authenticated bearer token verified via introspection
+type BearerTokenAuthentication struct {
+	Token      *OAuth2AccessToken `json:"token"`
+	Attributes map[string]any     `json:"attributes"`
+	AbstractAuthenticationToken
+}
+
+var _ Authentication = &BearerTokenAuthentication{}
+
+func (this BearerTokenAuthentication) New(
+	principal OAuth2AuthenticatedPrincipal,
+	token *OAuth2AccessToken,
+	authorities []GrantedAuthority,
+) *BearerTokenAuthentication {
+	this.Principal = principal
+	this.Token = token
+	this.Authorities = authorities
+	if principal != nil {
+		this.Attributes = principal.GetAttributes()
+	}
+	this.Authenticated = true
+	return &this
+}
+
+func NewBearerTokenAuthentication(
+	principal OAuth2AuthenticatedPrincipal,
+	token *OAuth2AccessToken,
+	authorities []GrantedAuthority,
+) *BearerTokenAuthentication {
+	return BearerTokenAuthentication{}.New(principal, token, authorities)
+}
+
+func (this *BearerTokenAuthentication) GetName() string {
+	if this.Principal == nil {
+		return ""
+	}
+	if p, ok := this.Principal.(OAuth2AuthenticatedPrincipal); ok && p != nil {
+		return p.GetName()
+	}
+	if p, ok := this.Principal.(interface{ GetName() string }); ok && p != nil {
+		return p.GetName()
+	}
+	return ""
+}
+
+func (this *BearerTokenAuthentication) GetCredentials() any {
+	if this.Token != nil {
+		return this.Token.GetTokenValue()
+	}
+	return ""
+}
+
+func (this *BearerTokenAuthentication) GetToken() *OAuth2AccessToken {
+	return this.Token
+}
+
+func (this *BearerTokenAuthentication) GetAttributes() map[string]any {
+	return this.Attributes
+}
+
 func init() {
 	gob.Register(&BearerTokenAuthenticationToken{})
 	gob.Register(&JwtAuthenticationToken{})
+	gob.Register(&BearerTokenAuthentication{})
 }

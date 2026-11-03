@@ -186,6 +186,29 @@ var _ = Describe("OAuth2 Configurers DSL", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("HttpSecurity does not configure bearerTokenAuthenticationFilter"))
 		})
+
+		It("configures Resource Server Opaque Token introspection via OpaqueToken() and OpaqueTokenIntrospector()", func() {
+			chain := (&HttpSecurityBuilder{}).
+				With(OAuth2ResourceServer).
+				OpaqueToken("https://auth.example.com/oauth2/introspect", "client-rs", "secret-rs").
+				And().
+				Build()
+
+			cfg, ok := chain.SecurityFilters()["bearerTokenAuthenticationFilter"].(*BearerTokenConfig)
+			Expect(ok).To(BeTrue())
+			Expect(cfg.OpaqueTokenIntrospector).NotTo(BeNil())
+
+			customIntrospector := NewNimbusOpaqueTokenIntrospector("https://auth.example.com/oauth2/introspect", "id", "sec")
+			chain2 := (&HttpSecurityBuilder{}).
+				With(OAuth2ResourceServer).
+				OpaqueTokenIntrospector(customIntrospector).
+				And().
+				Build()
+
+			cfg2, ok := chain2.SecurityFilters()["bearerTokenAuthenticationFilter"].(*BearerTokenConfig)
+			Expect(ok).To(BeTrue())
+			Expect(cfg2.OpaqueTokenIntrospector).To(Equal(customIntrospector))
+		})
 	})
 
 	Context("OAuth2AuthorizationServerConfigurer", func() {

@@ -1,6 +1,8 @@
 package resourceserver
 
 import (
+	"net/url"
+
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
@@ -40,4 +42,60 @@ func (this *BearerTokenAuthenticationFilter) SetInjectedDepsForTest(
 
 func (this *BearerTokenAuthenticationFilter) GetDepsForTest() (BearerTokenResolver, AuthenticationManager, SecurityContextHolder) {
 	return this.tokenResolver, this.authenticationManager, this.securityContextHolder
+}
+
+func (this *OpaqueTokenAuthenticationProvider) SetInjectedIntrospectorForTest(intro OpaqueTokenIntrospector) {
+	this.injectedIntrospector = OptionalOf(intro)
+}
+
+func (this *OpaqueTokenAuthenticationProvider) SetInjectedConverterForTest(conv OpaqueTokenAuthenticationConverter) {
+	this.injectedConverter = OptionalOf(conv)
+}
+
+func (this *OpaqueTokenAuthenticationProvider) GetIntrospectorForTest() OpaqueTokenIntrospector {
+	return this.introspector
+}
+
+func (this *OpaqueTokenAuthenticationProvider) GetConverterForTest() OpaqueTokenAuthenticationConverter {
+	return this.converter
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedIntrospectorForTest(intro OpaqueTokenIntrospector) {
+	this.injectedIntrospector = OptionalOf(intro)
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedOpaqueConverterForTest(conv OpaqueTokenAuthenticationConverter) {
+	this.injectedOpaqueConverter = OptionalOf(conv)
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedJwtDecoderForTest(dec JwtDecoder) {
+	this.injectedJwtDecoder = OptionalOf(dec)
+}
+
+func (this *BearerTokenAuthenticationFilter) SetInjectedConverterForTest(conv JwtAuthenticationConverter) {
+	this.injectedConverter = OptionalOf(conv)
+}
+
+func NewBearerAuthenticationManagerForTest(
+	jwtProvider *JwtAuthenticationProvider,
+	opaqueProvider *OpaqueTokenAuthenticationProvider,
+	fallback AuthenticationManager,
+) AuthenticationManager {
+	return &bearerAuthenticationManager{
+		jwtProvider:    jwtProvider,
+		opaqueProvider: opaqueProvider,
+		fallback:       fallback,
+	}
+}
+
+func IsSameOriginForTest(target, configured *url.URL) bool {
+	return isSameOrigin(target, configured)
+}
+
+func EffectivePortForTest(u *url.URL) string {
+	return effectivePort(u)
+}
+
+func ParseIntegerTimestampForTest(val any) (int64, bool) {
+	return parseIntegerTimestamp(val)
 }

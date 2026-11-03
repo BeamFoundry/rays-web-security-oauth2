@@ -1,5 +1,7 @@
 # BeamFoundry Rays Web Security OAuth2 🔐
 
+[![beamfoundry](https://rays.bfdy.dev/rays-web-security-oauth2/rays-web-security-oauth2-bfdy.jpeg)](https://rays.bfdy.dev/rays-web-security-oauth2/)
+
 [![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![codecov](https://codecov.io/gh/BeamFoundry/rays-web-security-oauth2/graph/badge.svg)](https://codecov.io/gh/BeamFoundry/rays-web-security-oauth2)
 
@@ -13,7 +15,7 @@ It delivers four complete, production-ready modules:
 
 1. **OAuth2 Login:** Federated authentication (SSO) with OpenID Connect (OIDC) & OAuth2 providers (Google, GitHub, Keycloak, Okta) using the Authorization Code grant with PKCE.
 2. **OAuth2 Client:** Managing client registrations, handling token refresh, client credentials machine-to-machine calls, and accessing protected external APIs.
-3. **OAuth2 Resource Server:** Protecting HTTP APIs using Bearer tokens (RFC 6750) with cryptographic JWT verification (JWK sets, key rotation, claims validation).
+3. **OAuth2 Resource Server:** Protecting HTTP APIs using Bearer tokens (RFC 6750) with cryptographic JWT verification (JWK sets, key rotation, claims validation) or Opaque Token Introspection (RFC 7662).
 4. **OAuth2 Authorization Server:** OAuth 2.1 Authorization Server that authenticates clients, validates authorization codes with PKCE, and issues signed JWT access tokens, refresh tokens, and JWK sets.
 
 ---
@@ -77,9 +79,9 @@ Rays Web Security structures web security around declarative **Security Filter C
 | :--- | :--- | :--- |
 | `SecurityFilter` | `OAuth2LoginAuthenticationFilter`, `BearerTokenAuthenticationFilter`, `OAuth2AuthorizationServerFilter` | Intercepts HTTP requests, extracts authorization codes or Bearer tokens, and dictates chain continuation or challenges. |
 | `SecurityEndpointRegistration` | `OAuth2LoginAuthenticationFilter`, `OAuth2AuthorizationServerFilter` | Automatically binds technical endpoints (`/oauth2/authorization/{id}`, `/login/oauth2/code/{id}`, `/oauth2/authorize`, `/oauth2/token`, `/oauth2/jwks`, etc.) to the underlying web router. |
-| `Authentication` | `OAuth2AuthenticationToken`, `OAuth2LoginAuthenticationToken`, `BearerTokenAuthenticationToken`, `JwtAuthenticationToken` | Encapsulates unauthenticated requests and authenticated principals, authorities, and credentials. |
+| `Authentication` | `OAuth2AuthenticationToken`, `OAuth2LoginAuthenticationToken`, `BearerTokenAuthenticationToken`, `JwtAuthenticationToken`, `BearerTokenAuthentication` | Encapsulates unauthenticated requests and authenticated principals, authorities, and credentials. |
 | `AuthenticationManager` | *(Provided by `rays-web-security`)* | Injected into OAuth2 filters. It automatically routes authentication requests to matching providers. |
-| `AuthenticationProvider` | `OAuth2LoginAuthenticationProvider`, `JwtAuthenticationProvider` | Specialized providers implementing `Supports(auth)` and `Authenticate(auth)`. Auto-injected into `AuthenticationManager`. |
+| `AuthenticationProvider` | `OAuth2LoginAuthenticationProvider`, `JwtAuthenticationProvider`, `OpaqueTokenAuthenticationProvider` | Specialized providers implementing `Supports(auth)` and `Authenticate(auth)`. Auto-injected into `AuthenticationManager`. |
 | `SecurityContextHolder` | `securityContextHolder.GetContext().SetAuthentication(...)` | Stores the authenticated `Authentication` in routine-local storage, accessible anywhere downstream. |
 
 ### The `AuthenticationManager` & `AuthenticationProvider` Relationship
@@ -99,6 +101,7 @@ An essential design principle of Rays Web Security is its pluggable provider arc
    Rather than reinventing an authentication manager, `rays-web-security-oauth2` defines domain-specific providers:
    - `OAuth2LoginAuthenticationProvider`: Authenticates authorization codes and exchanges them for user profiles.
    - `JwtAuthenticationProvider`: Validates JWT Bearer tokens and extracts granted authorities.
+   - `OpaqueTokenAuthenticationProvider`: Validates Bearer tokens via RFC 7662 token introspection against an authorization server.
 3. **Automatic Provider Routing:**
    When you register one of these providers as a Beam, `rays-web-security`'s `AuthenticationManager` automatically detects it. When a filter calls `this.authenticationManager.Authenticate(token)`, the manager iterates through its providers, calls `Supports(token)`, and delegates execution to your OAuth2 provider.
 4. **Routine-Local Context Registration:**
@@ -211,8 +214,8 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
         AuthorizedHTTPRequests().
             Paths("/api/public/**").PermitAll().
             Paths("/api/admin/**").HasAuthority("SCOPE_admin").
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```
@@ -277,8 +280,8 @@ func (this *WebSecurityConfig) HttpSecurity(
         And().
         AuthorizedHTTPRequests().
             Paths("/", "/login/**", "/static/**").PermitAll().
-            AnyRequest().Authenticated().
         And().
+        AnyRequest().Authenticated().
         Build()
 }
 ```
@@ -680,17 +683,63 @@ Now, endpoint policies can enforce:
 AuthorizedHTTPRequests().
     Paths("/api/orders/**").HasAuthority("SCOPE_read").
     Paths("/api/admin/**").HasRole("ADMIN"). // Expects "ROLE_ADMIN" from roles claims
-    AnyRequest().Authenticated()
+And().
+AnyRequest().Authenticated()
 ```
 
 ### Opaque Tokens & Introspection
 
-> [!NOTE]
-> Resource-server support for opaque tokens via `OpaqueTokenAuthenticationProvider` is currently unavailable. Opaque token introspection flow on the Resource Server side is planned for a future release; currently, Resource Server token validation is supported via stateless JWT verification (`JwtAuthenticationProvider` with `JwtDecoder`).
->
-> The Authorization Server provides an RFC 7662 introspection endpoint at `/oauth2/introspect` for clients to query token status. Resource Server integration using an introspection provider will be documented once the provider and its registration exist.
+When your architecture uses **opaque (by-reference) tokens** instead of self-contained JWTs, the Resource Server validates tokens by delegating to the Authorization Server's **Introspection Endpoint (RFC 7662)** via `OpaqueTokenAuthenticationProvider`.
 
----
+#### The `OpaqueTokenIntrospector` Interface
+
+```go
+type OpaqueTokenIntrospector interface {
+    Introspect(token string) (OAuth2AuthenticatedPrincipal, Error)
+}
+```
+
+The default implementation `NimbusOpaqueTokenIntrospector` queries the remote introspection endpoint with HTTP Basic client authentication:
+
+```go
+introspector := NewNimbusOpaqueTokenIntrospector(
+    "https://auth.example.com/oauth2/introspect",
+    "resource-server-client",
+    "resource-server-secret",
+).
+    WithAuthorityPrefix("SCOPE_").
+    WithAuthoritiesClaims("scope", "roles").
+    WithClockSkew(60 * time.Second)
+```
+
+#### Configuring with Rays Configuration & Fluent DSL
+
+```go
+type OpaqueTokenSecurityConfig struct {
+    Configuration
+}
+
+func (this *OpaqueTokenSecurityConfig) HttpSecurity() *HttpSecurity {
+    return (&HttpSecurityBuilder{}).
+        With(OAuth2ResourceServer).
+            OpaqueToken(
+                "https://auth.example.com/oauth2/introspect",
+                "resource-server-client",
+                "resource-server-secret",
+            ).
+            Realm("orders-api").
+        And().
+        Csrf().Disable().
+        SessionCreationPolicy().Stateless().
+        AuthorizedHTTPRequests().
+            Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
+        And().
+        AnyRequest().Authenticated().
+        Build()
+}
+```
+
+Upon successful introspection, `OpaqueTokenAuthenticationProvider` maps claims and scopes into `GrantedAuthority` slices (e.g. `SCOPE_read`, `SCOPE_write`) and places an authenticated `*BearerTokenAuthentication` into the routine-local `SecurityContextHolder`.
 
 ## OAuth 2.1 Authorization Server
 
@@ -889,8 +938,8 @@ func (this *SecurityConfig) HttpSecurity(
 		And().
 		AuthorizedHTTPRequests().
 			Paths("/", "/login/**").PermitAll().
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
@@ -921,13 +970,50 @@ func (this *ResourceServerSecurityConfig) HttpSecurity() *HttpSecurity {
 		AuthorizedHTTPRequests().
 			Paths("/api/public/**").PermitAll().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
-			AnyRequest().Authenticated().
 		And().
+		AnyRequest().Authenticated().
 		Build()
 }
 ```
 
-#### 3. Authorization Server Configuration
+#### 3. Resource Server (Opaque Token Introspection) Configuration
+
+```go
+package config
+
+import (
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/config"
+	. "github.com/BeamFoundry/rays-web-security/pkg/config"
+	. "github.com/BeamFoundry/rays/pkg/core"
+)
+
+type OpaqueTokenResourceServerConfig struct {
+	Configuration
+}
+
+func (this *OpaqueTokenResourceServerConfig) HttpSecurity() *HttpSecurity {
+	// AuthenticationManager and SecurityContextHolder are auto-injected by Rays
+	return (&HttpSecurityBuilder{}).
+		With(OAuth2ResourceServer).
+			OpaqueToken(
+				"https://auth.example.com/oauth2/introspect",
+				"resource-server-client",
+				"resource-server-secret",
+			).
+			Realm("orders-api").
+		And().
+		Csrf().Disable().
+		SessionCreationPolicy().Stateless().
+		AuthorizedHTTPRequests().
+			Paths("/api/public/**").PermitAll().
+			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
+		And().
+		AnyRequest().Authenticated().
+		Build()
+}
+```
+
+#### 4. Authorization Server Configuration
 
 ```go
 package config

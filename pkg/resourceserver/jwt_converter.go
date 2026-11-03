@@ -21,9 +21,9 @@ type DefaultJwtAuthenticationConverter struct {
 }
 
 func (this DefaultJwtAuthenticationConverter) New() *DefaultJwtAuthenticationConverter {
-	this.principalClaimName = "sub"
-	this.authorityPrefix = "SCOPE_"
-	this.authoritiesClaims = []string{"scope", "scp", "authorities", "roles", "realm_access.roles"}
+	this.principalClaimName = defaultPrincipalClaimName
+	this.authorityPrefix = defaultAuthorityPrefix
+	this.authoritiesClaims = []string{claimScope, claimScp, "authorities", "roles", "realm_access.roles"}
 	return &this
 }
 
@@ -76,7 +76,7 @@ func (this *DefaultJwtAuthenticationConverter) Convert(token *Jwt) (*JwtAuthenti
 		if s == "" {
 			return
 		}
-		if sourceClaim == "scope" || sourceClaim == "scp" {
+		if sourceClaim == claimScope || sourceClaim == claimScp {
 			if this.authorityPrefix == "" {
 				authorities = append(authorities, Authority(s))
 			} else {
@@ -114,7 +114,7 @@ func (this *DefaultJwtAuthenticationConverter) Convert(token *Jwt) (*JwtAuthenti
 	}
 
 	principalName := token.Subject()
-	if this.principalClaimName != "sub" {
+	if this.principalClaimName != defaultPrincipalClaimName {
 		if customName, ok := token.Claims[this.principalClaimName].(string); ok && customName != "" {
 			principalName = customName
 		}

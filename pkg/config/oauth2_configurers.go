@@ -106,12 +106,13 @@ func (this *OAuth2LoginConfigurer) And() *HttpSecurityBuilder {
 
 // OAuth2ResourceServerConfigurer configures Bearer token authentication
 type OAuth2ResourceServerConfigurer struct {
-	builder       *HttpSecurityBuilder
-	tokenResolver BearerTokenResolver
-	authManager   AuthenticationManager
-	contextHolder SecurityContextHolder
-	jwtDecoder    JwtDecoder
-	realmName     string
+	builder                 *HttpSecurityBuilder
+	tokenResolver           BearerTokenResolver
+	authManager             AuthenticationManager
+	contextHolder           SecurityContextHolder
+	jwtDecoder              JwtDecoder
+	opaqueTokenIntrospector OpaqueTokenIntrospector
+	realmName               string
 }
 
 func (this OAuth2ResourceServerConfigurer) New(builder *HttpSecurityBuilder) *OAuth2ResourceServerConfigurer {
@@ -144,6 +145,26 @@ func (this *OAuth2ResourceServerConfigurer) JwtDecoder(decoder JwtDecoder) *OAut
 	return this
 }
 
+func (this *OAuth2ResourceServerConfigurer) OpaqueToken(
+	introspectionURI string,
+	clientID string,
+	clientSecret string,
+) *OAuth2ResourceServerConfigurer {
+	this.opaqueTokenIntrospector = NewNimbusOpaqueTokenIntrospector(
+		introspectionURI,
+		clientID,
+		clientSecret,
+	)
+	return this
+}
+
+func (this *OAuth2ResourceServerConfigurer) OpaqueTokenIntrospector(
+	introspector OpaqueTokenIntrospector,
+) *OAuth2ResourceServerConfigurer {
+	this.opaqueTokenIntrospector = introspector
+	return this
+}
+
 func (this *OAuth2ResourceServerConfigurer) Realm(realm string) *OAuth2ResourceServerConfigurer {
 	this.realmName = realm
 	return this
@@ -151,11 +172,12 @@ func (this *OAuth2ResourceServerConfigurer) Realm(realm string) *OAuth2ResourceS
 
 func (this *OAuth2ResourceServerConfigurer) And() *HttpSecurityBuilder {
 	cfg := &BearerTokenConfig{
-		TokenResolver:         this.tokenResolver,
-		AuthenticationManager: this.authManager,
-		SecurityContextHolder: this.contextHolder,
-		JwtDecoder:            this.jwtDecoder,
-		RealmName:             this.realmName,
+		TokenResolver:           this.tokenResolver,
+		AuthenticationManager:   this.authManager,
+		SecurityContextHolder:   this.contextHolder,
+		JwtDecoder:              this.jwtDecoder,
+		OpaqueTokenIntrospector: this.opaqueTokenIntrospector,
+		RealmName:               this.realmName,
 	}
 	this.builder.AddCustomSecurityFilter("bearerTokenAuthenticationFilter", cfg)
 	return this.builder

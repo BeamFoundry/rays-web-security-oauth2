@@ -7,7 +7,7 @@
 //   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt]: JWT parsing, cryptographic signing (RSA/HMAC), validation, and JWK sets.
 //   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/client]: OAuth2 Client management, repositories, token refresh, and client credentials.
 //   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/login]: OAuth2 Login filter, authorization code exchange with PKCE, and UserInfo/OIDC services.
-//   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/resourceserver]: Bearer token filter, token resolver, and JWT authentication provider.
+//   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/resourceserver]: Bearer token filter, token resolver, JWT authentication provider, and opaque token introspection provider.
 //   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/server]: OAuth 2.1 Authorization Server (without OIDC ID token issuance) with authorization, token, jwks, introspect, and discovery endpoints.
 //   - [github.com/BeamFoundry/rays-web-security-oauth2/pkg/config]: Fluent configurers for HttpSecurityBuilder.
 package rays_web_security_oauth2 //nolint:revive // Ignoring package naming hint

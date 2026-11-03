@@ -72,7 +72,7 @@ func isValidHost(h string) bool {
 	if ip := net.ParseIP(h); ip != nil {
 		return true
 	}
-	for _, part := range strings.Split(h, ".") {
+	for part := range strings.SplitSeq(h, ".") {
 		if part == "" || len(part) > 63 {
 			return false
 		}

@@ -14,22 +14,39 @@ import (
 
 // BearerTokenConfig holds configuration parameters for BearerTokenAuthenticationFilter
 type BearerTokenConfig struct {
-	TokenResolver         BearerTokenResolver
-	AuthenticationManager AuthenticationManager
-	SecurityContextHolder SecurityContextHolder
-	JwtDecoder            JwtDecoder
-	RealmName             string
+	TokenResolver           BearerTokenResolver
+	AuthenticationManager   AuthenticationManager
+	SecurityContextHolder   SecurityContextHolder
+	JwtDecoder              JwtDecoder
+	OpaqueTokenIntrospector OpaqueTokenIntrospector
+	RealmName               string
 }
 
-type jwtAuthenticationManager struct {
+type bearerAuthenticationManager struct {
 	Manager
-	provider *JwtAuthenticationProvider
-	fallback AuthenticationManager
+	jwtProvider    *JwtAuthenticationProvider
+	opaqueProvider *OpaqueTokenAuthenticationProvider
+	fallback       AuthenticationManager
 }
 
-func (this *jwtAuthenticationManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
-	if this.provider != nil && this.provider.Supports(auth) {
-		return this.provider.Authenticate(auth)
+func (this *bearerAuthenticationManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
+	if this.jwtProvider != nil && this.jwtProvider.Supports(auth) {
+		res, err := this.jwtProvider.Authenticate(auth)
+		if err == nil {
+			return res, nil
+		}
+		if this.opaqueProvider == nil && this.fallback == nil {
+			return res, err
+		}
+	}
+	if this.opaqueProvider != nil && this.opaqueProvider.Supports(auth) {
+		res, err := this.opaqueProvider.Authenticate(auth)
+		if err == nil {
+			return res, nil
+		}
+		if this.fallback == nil {
+			return res, err
+		}
 	}
 	if this.fallback != nil {
 		return this.fallback.Authenticate(auth)
@@ -41,17 +58,20 @@ func (this *jwtAuthenticationManager) Authenticate(auth Authentication) (Authent
 type BearerTokenAuthenticationFilter struct {
 	Component
 	Prototype
-	tokenResolver         BearerTokenResolver
-	authenticationManager AuthenticationManager
-	securityContextHolder SecurityContextHolder
-	jwtDecoder            JwtDecoder
-	config                *BearerTokenConfig
-	injectedTokenResolver Optional[BearerTokenResolver]        `@:"Inject"`
-	injectedAuthManager   Optional[AuthenticationManager]      `@:"Inject"`
-	injectedContextHolder Optional[SecurityContextHolder]      `@:"Inject"`
-	injectedJwtDecoder    Optional[JwtDecoder]                 `@:"Inject"`
-	injectedConverter     Optional[JwtAuthenticationConverter] `@:"Inject"`
-	realmName             string
+	tokenResolver           BearerTokenResolver
+	authenticationManager   AuthenticationManager
+	securityContextHolder   SecurityContextHolder
+	jwtDecoder              JwtDecoder
+	opaqueTokenIntrospector OpaqueTokenIntrospector
+	config                  *BearerTokenConfig
+	injectedTokenResolver   Optional[BearerTokenResolver]                `@:"Inject"`
+	injectedAuthManager     Optional[AuthenticationManager]              `@:"Inject"`
+	injectedContextHolder   Optional[SecurityContextHolder]              `@:"Inject"`
+	injectedJwtDecoder      Optional[JwtDecoder]                         `@:"Inject"`
+	injectedConverter       Optional[JwtAuthenticationConverter]         `@:"Inject"`
+	injectedIntrospector    Optional[OpaqueTokenIntrospector]            `@:"Inject"`
+	injectedOpaqueConverter Optional[OpaqueTokenAuthenticationConverter] `@:"Inject"`
+	realmName               string
 }
 
 var (
@@ -93,14 +113,20 @@ func (this *BearerTokenAuthenticationFilter) WithJwtDecoder(decoder JwtDecoder) 
 	return this
 }
 
+func (this *BearerTokenAuthenticationFilter) WithOpaqueTokenIntrospector(introspector OpaqueTokenIntrospector) *BearerTokenAuthenticationFilter {
+	this.opaqueTokenIntrospector = introspector
+	return this
+}
+
 func (this *BearerTokenAuthenticationFilter) Config() *BearerTokenConfig {
 	if this.config == nil {
 		this.config = &BearerTokenConfig{
-			TokenResolver:         this.tokenResolver,
-			AuthenticationManager: this.authenticationManager,
-			SecurityContextHolder: this.securityContextHolder,
-			JwtDecoder:            this.jwtDecoder,
-			RealmName:             this.realmName,
+			TokenResolver:           this.tokenResolver,
+			AuthenticationManager:   this.authenticationManager,
+			SecurityContextHolder:   this.securityContextHolder,
+			JwtDecoder:              this.jwtDecoder,
+			OpaqueTokenIntrospector: this.opaqueTokenIntrospector,
+			RealmName:               this.realmName,
 		}
 	}
 	return this.config
@@ -119,6 +145,9 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 	}
 	if dec, ok := this.injectedJwtDecoder.Get(); ok {
 		this.jwtDecoder = dec
+	}
+	if intro, ok := this.injectedIntrospector.Get(); ok {
+		this.opaqueTokenIntrospector = intro
 	}
 
 	if ct := ctx.Value(PrototypeContextParentInstance); ct != nil {
@@ -147,6 +176,9 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 		if cfg.JwtDecoder != nil {
 			this.jwtDecoder = cfg.JwtDecoder
 		}
+		if cfg.OpaqueTokenIntrospector != nil {
+			this.opaqueTokenIntrospector = cfg.OpaqueTokenIntrospector
+		}
 		if cfg.RealmName != "" {
 			this.realmName = cfg.RealmName
 		}
@@ -157,15 +189,28 @@ func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Er
 	if this.realmName == "" {
 		this.realmName = "rays-web-security-oauth2"
 	}
+
+	var jwtProvider *JwtAuthenticationProvider
 	if this.jwtDecoder != nil {
-		jwtProvider := JwtAuthenticationProvider{}.New(this.jwtDecoder)
+		jwtProvider = JwtAuthenticationProvider{}.New(this.jwtDecoder)
 		if conv, ok := this.injectedConverter.Get(); ok {
 			jwtProvider.WithConverter(conv)
 		}
-		if this.authenticationManager == nil {
-			this.authenticationManager = &jwtAuthenticationManager{provider: jwtProvider}
-		} else {
-			this.authenticationManager = &jwtAuthenticationManager{provider: jwtProvider, fallback: this.authenticationManager}
+	}
+
+	var opaqueProvider *OpaqueTokenAuthenticationProvider
+	if this.opaqueTokenIntrospector != nil {
+		opaqueProvider = OpaqueTokenAuthenticationProvider{}.New(this.opaqueTokenIntrospector)
+		if conv, ok := this.injectedOpaqueConverter.Get(); ok {
+			opaqueProvider.WithConverter(conv)
+		}
+	}
+
+	if jwtProvider != nil || opaqueProvider != nil {
+		this.authenticationManager = &bearerAuthenticationManager{
+			jwtProvider:    jwtProvider,
+			opaqueProvider: opaqueProvider,
+			fallback:       this.authenticationManager,
 		}
 	}
 	return nil

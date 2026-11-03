@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/gob"
 	"maps"
 
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
@@ -132,4 +133,48 @@ func (this *DefaultOidcUser) GetIdToken() *OidcIdToken {
 
 func (this *DefaultOidcUser) GetUserInfo() *OidcUserInfo {
 	return this.UserInfo
+}
+
+// DefaultOAuth2AuthenticatedPrincipal is the default implementation of OAuth2AuthenticatedPrincipal
+type DefaultOAuth2AuthenticatedPrincipal struct {
+	Name        string             `json:"name"`
+	Attributes  map[string]any     `json:"attributes"`
+	Authorities []GrantedAuthority `json:"authorities"`
+}
+
+var _ OAuth2AuthenticatedPrincipal = &DefaultOAuth2AuthenticatedPrincipal{}
+
+func (this DefaultOAuth2AuthenticatedPrincipal) New(
+	name string,
+	attributes map[string]any,
+	authorities []GrantedAuthority,
+) *DefaultOAuth2AuthenticatedPrincipal {
+	this.Name = name
+	this.Attributes = attributes
+	this.Authorities = authorities
+	return &this
+}
+
+func NewDefaultOAuth2AuthenticatedPrincipal(
+	name string,
+	attributes map[string]any,
+	authorities []GrantedAuthority,
+) *DefaultOAuth2AuthenticatedPrincipal {
+	return DefaultOAuth2AuthenticatedPrincipal{}.New(name, attributes, authorities)
+}
+
+func (this *DefaultOAuth2AuthenticatedPrincipal) GetName() string {
+	return this.Name
+}
+
+func (this *DefaultOAuth2AuthenticatedPrincipal) GetAttributes() map[string]any {
+	return this.Attributes
+}
+
+func (this *DefaultOAuth2AuthenticatedPrincipal) GetAuthorities() []GrantedAuthority {
+	return this.Authorities
+}
+
+func init() {
+	gob.Register(&DefaultOAuth2AuthenticatedPrincipal{})
 }

@@ -1,3 +1,4 @@
+// Package client_test contains unit tests for OAuth 2.0 client registration repositories, authorized client services, and managers.
 package client_test
 
 import (
@@ -15,6 +16,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestClient runs the Ginkgo test suite for the OAuth2 client package.
 func TestClient(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 Client Suite")
@@ -670,22 +672,28 @@ var _ = Describe("Authorized Client Providers & Manager", func() {
 	})
 })
 
+// clientFailingRoundTripper is an http.RoundTripper test double that always returns a network error.
 type clientFailingRoundTripper struct{}
 
+// RoundTrip simulates a network connection failure.
 func (this *clientFailingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
 	return nil, errors.New("simulated network connection failure")
 }
 
+// testFailingAuthorizedClientService is an OAuth2AuthorizedClientService test double that fails on save and load.
 type testFailingAuthorizedClientService struct{}
 
+// SaveAuthorizedClient simulates a storage save error.
 func (this *testFailingAuthorizedClientService) SaveAuthorizedClient(_ *OAuth2AuthorizedClient) Error {
 	return NewError("StorageSaveError", "simulated save failure")
 }
 
+// LoadAuthorizedClient simulates an authorized client lookup error.
 func (this *testFailingAuthorizedClientService) LoadAuthorizedClient(_, _ string) (*OAuth2AuthorizedClient, Error) {
 	return nil, NewError("AuthorizedClientNotFound", "client not found")
 }
 
+// RemoveAuthorizedClient is a no-op that returns nil.
 func (this *testFailingAuthorizedClientService) RemoveAuthorizedClient(_, _ string) Error {
 	return nil
 }

@@ -10,32 +10,42 @@ import (
 
 // OAuth2AuthorizedClientService manages authorized clients
 type OAuth2AuthorizedClientService interface {
+	// LoadAuthorizedClient retrieves the OAuth2AuthorizedClient for the given client registration ID and principal name.
 	LoadAuthorizedClient(registrationID, principalName string) (*OAuth2AuthorizedClient, Error)
+	// SaveAuthorizedClient persists or updates an OAuth2AuthorizedClient.
 	SaveAuthorizedClient(authorizedClient *OAuth2AuthorizedClient) Error
+	// RemoveAuthorizedClient deletes the OAuth2AuthorizedClient associated with the given client registration ID and principal name.
 	RemoveAuthorizedClient(registrationID, principalName string) Error
 }
 
+// authorizedClientKey uniquely identifies an authorized client by registration ID and principal name.
 type authorizedClientKey struct {
 	registrationID string
 	principalName  string
 }
 
-// InMemoryOAuth2AuthorizedClientService is an in-memory implementation of OAuth2AuthorizedClientService
+// InMemoryOAuth2AuthorizedClientService is an in-memory implementation of OAuth2AuthorizedClientService.
+// Service operations are synchronized, but callers must synchronize concurrent access to or mutation of OAuth2AuthorizedClient objects shared with the service.
 type InMemoryOAuth2AuthorizedClientService struct {
 	mu      *sync.RWMutex
 	clients map[authorizedClientKey]*OAuth2AuthorizedClient
 }
 
+// New creates a new InMemoryOAuth2AuthorizedClientService.
+// Service operations are synchronized, but callers must synchronize concurrent access to or mutation of OAuth2AuthorizedClient objects shared with the service.
 func (this InMemoryOAuth2AuthorizedClientService) New() *InMemoryOAuth2AuthorizedClientService {
 	this.mu = &sync.RWMutex{}
 	this.clients = make(map[authorizedClientKey]*OAuth2AuthorizedClient)
 	return &this
 }
 
+// NewInMemoryOAuth2AuthorizedClientService creates a new InMemoryOAuth2AuthorizedClientService.
+// Service operations are synchronized, but callers must synchronize concurrent access to or mutation of OAuth2AuthorizedClient objects shared with the service.
 func NewInMemoryOAuth2AuthorizedClientService() *InMemoryOAuth2AuthorizedClientService {
 	return InMemoryOAuth2AuthorizedClientService{}.New()
 }
 
+// key constructs the composite lookup key for a client registration ID and principal name.
 func (this *InMemoryOAuth2AuthorizedClientService) key(regID, principal string) authorizedClientKey {
 	return authorizedClientKey{
 		registrationID: regID,
@@ -43,6 +53,7 @@ func (this *InMemoryOAuth2AuthorizedClientService) key(regID, principal string) 
 	}
 }
 
+// LoadAuthorizedClient looks up an OAuth2AuthorizedClient in memory by registration ID and principal name.
 func (this *InMemoryOAuth2AuthorizedClientService) LoadAuthorizedClient(registrationID, principalName string) (*OAuth2AuthorizedClient, Error) {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
@@ -54,6 +65,7 @@ func (this *InMemoryOAuth2AuthorizedClientService) LoadAuthorizedClient(registra
 	return client, nil
 }
 
+// SaveAuthorizedClient stores an OAuth2AuthorizedClient in memory.
 func (this *InMemoryOAuth2AuthorizedClientService) SaveAuthorizedClient(client *OAuth2AuthorizedClient) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -62,6 +74,7 @@ func (this *InMemoryOAuth2AuthorizedClientService) SaveAuthorizedClient(client *
 	return nil
 }
 
+// RemoveAuthorizedClient removes the OAuth2AuthorizedClient for the given registration ID and principal name from memory.
 func (this *InMemoryOAuth2AuthorizedClientService) RemoveAuthorizedClient(registrationID, principalName string) Error {
 	this.mu.Lock()
 	defer this.mu.Unlock()

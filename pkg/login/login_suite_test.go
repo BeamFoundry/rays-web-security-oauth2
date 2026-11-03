@@ -1,3 +1,4 @@
+// Package login_test contains unit and fuzz tests for OAuth 2.0 and OpenID Connect 1.0 login workflows.
 package login_test
 
 import (
@@ -24,16 +25,19 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestLogin runs the Ginkgo test suite for the OAuth2 login package.
 func TestLogin(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 Login Suite")
 }
 
+// mockAuthManager is a test double for AuthenticationManager with an optional custom authenticate callback.
 type mockAuthManager struct {
 	Manager
 	authenticateFunc func(Authentication) (Authentication, AuthenticationException)
 }
 
+// Authenticate invokes authenticateFunc if set, or returns the supplied Authentication unchanged.
 func (this *mockAuthManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
 	if this.authenticateFunc != nil {
 		return this.authenticateFunc(auth)
@@ -41,11 +45,13 @@ func (this *mockAuthManager) Authenticate(auth Authentication) (Authentication, 
 	return auth, nil
 }
 
+// mockTestJwtDecoder is a test double for JwtDecoder that returns a preconfigured Jwt or Error.
 type mockTestJwtDecoder struct {
 	jwt *Jwt
 	err Error
 }
 
+// Decode returns the configured Jwt or Error.
 func (this *mockTestJwtDecoder) Decode(_ string) (*Jwt, Error) {
 	if this.err != nil {
 		return nil, this.err
@@ -53,25 +59,38 @@ func (this *mockTestJwtDecoder) Decode(_ string) (*Jwt, Error) {
 	return this.jwt, nil
 }
 
+// mockSecurityContext is an in-memory test double for SecurityContext.
 type mockSecurityContext struct {
 	auth  Authentication
 	debug string
 }
 
-func (this *mockSecurityContext) GetAuthentication() Authentication    { return this.auth }
-func (this *mockSecurityContext) SetAuthentication(a Authentication)   { this.auth = a }
-func (this *mockSecurityContext) SetHTTPPolicyDebugValue(debug string) { this.debug = debug }
-func (this *mockSecurityContext) GetHTTPPolicyDebugValue() string      { return this.debug }
+// GetAuthentication returns the stored Authentication.
+func (this *mockSecurityContext) GetAuthentication() Authentication { return this.auth }
 
+// SetAuthentication sets the current Authentication in the context.
+func (this *mockSecurityContext) SetAuthentication(a Authentication) { this.auth = a }
+
+// SetHTTPPolicyDebugValue sets the HTTP policy debug string.
+func (this *mockSecurityContext) SetHTTPPolicyDebugValue(debug string) { this.debug = debug }
+
+// GetHTTPPolicyDebugValue returns the HTTP policy debug string.
+func (this *mockSecurityContext) GetHTTPPolicyDebugValue() string { return this.debug }
+
+// mockSecurityContextHolder is an in-memory test double for SecurityContextHolder.
 type mockSecurityContextHolder struct {
 	ctx SecurityContext
 }
 
+// ClearContext resets the stored SecurityContext to nil.
 func (this *mockSecurityContextHolder) ClearContext() { this.ctx = nil }
+
+// SetContext stores the given SecurityContext.
 func (this *mockSecurityContextHolder) SetContext(sc SecurityContext) {
 	this.ctx = sc
 }
 
+// GetContext returns the current SecurityContext, lazily initializing one if nil.
 func (this *mockSecurityContextHolder) GetContext() SecurityContext {
 	if this.ctx == nil {
 		this.ctx = &mockSecurityContext{}
@@ -1249,30 +1268,50 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 	})
 })
 
+// loginFailingRoundTripper is an http.RoundTripper test double that always returns a network error.
 type loginFailingRoundTripper struct{}
 
+// RoundTrip simulates a network connection failure.
 func (this *loginFailingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
 	return nil, errors.New("simulated network connection failure")
 }
 
+// failingOAuth2UserService is an OAuth2UserService test double that always returns an error.
 type failingOAuth2UserService struct{}
 
+// LoadUser returns a simulated OAuth2User loading error.
 func (this *failingOAuth2UserService) LoadUser(_ *OAuth2UserRequest) (OAuth2User, Error) {
 	return nil, NewError("LoadOAuth2UserFailed", "load oauth2 user error")
 }
 
+// failingOidcUserService is an OidcUserService test double that always returns an error.
 type failingOidcUserService struct{}
 
+// LoadUser returns a simulated OidcUser loading error.
 func (this *failingOidcUserService) LoadUser(_ *OidcUserRequest) (OidcUser, Error) {
 	return nil, NewError("LoadOidcUserFailed", "load oidc user error")
 }
 
+// mockSimpleAuth is a minimal Authentication test double that is not an OAuth2LoginAuthenticationToken.
 type mockSimpleAuth struct{}
 
+// GetAuthorities returns nil authorities.
 func (this *mockSimpleAuth) GetAuthorities() []GrantedAuthority { return nil }
-func (this *mockSimpleAuth) GetCredentials() any                { return nil }
-func (this *mockSimpleAuth) GetDetails() any                    { return nil }
-func (this *mockSimpleAuth) GetPrincipal() any                  { return nil }
-func (this *mockSimpleAuth) IsAuthenticated() bool              { return false }
-func (this *mockSimpleAuth) SetAuthenticated(_ bool)            {}
-func (this *mockSimpleAuth) GetName() string                    { return "simple" }
+
+// GetCredentials returns nil credentials.
+func (this *mockSimpleAuth) GetCredentials() any { return nil }
+
+// GetDetails returns nil details.
+func (this *mockSimpleAuth) GetDetails() any { return nil }
+
+// GetPrincipal returns nil principal.
+func (this *mockSimpleAuth) GetPrincipal() any { return nil }
+
+// IsAuthenticated returns false.
+func (this *mockSimpleAuth) IsAuthenticated() bool { return false }
+
+// SetAuthenticated is a no-op.
+func (this *mockSimpleAuth) SetAuthenticated(_ bool) {}
+
+// GetName returns the fixed name "simple".
+func (this *mockSimpleAuth) GetName() string { return "simple" }

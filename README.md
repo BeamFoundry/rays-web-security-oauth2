@@ -1169,7 +1169,7 @@ Given the security-critical nature of OAuth 2.0 / OpenID Connect implementations
 3. **Native Go Fuzz Testing (`testing.F`):**
    - `FuzzParseUnverified` (`pkg/jwt/jwt_fuzz_test.go`): Robust against malformed inputs and arbitrary byte streams.
    - `FuzzNimbusJwtDecoder` (`pkg/jwt/jwt_fuzz_test.go`): Parser resilience against arbitrary tokens.
-   - `FuzzHandleAuthorizeRedirect` (`pkg/server/redirect_fuzz_test.go`): Open redirect vectors, scheme injections, and CRLF payloads.
+   - `FuzzHandleAuthorizeRedirect` (`pkg/server/redirect_fuzz_test.go`): Supplies arbitrary `redirect_uri` and `state` values (seeded with open redirect vectors, scheme injections, and CRLF payloads) to `/oauth2/authorize` and only fails on a panic.
    - `FuzzBuildAuthorizationURI` (`pkg/login/pkce_fuzz_test.go`): Query parameter escaping and PKCE challenge formatting.
 
 ### Running the Test Suites

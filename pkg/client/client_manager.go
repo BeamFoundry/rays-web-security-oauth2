@@ -25,12 +25,15 @@ type OAuth2AuthorizeRequest struct {
 
 // OAuth2AuthorizedClientProvider handles authorization for a specific grant or state
 type OAuth2AuthorizedClientProvider interface {
+	// Authorize attempts to authorize or re-authorize the client described by the request.
 	Authorize(request *OAuth2AuthorizeRequest) (*OAuth2AuthorizedClient, Error)
+	// Supports reports whether this provider can handle the given authorization request.
 	Supports(request *OAuth2AuthorizeRequest) bool
 }
 
 // OAuth2AuthorizedClientManager orchestrates client authorization
 type OAuth2AuthorizedClientManager interface {
+	// Authorize resolves, validates, or obtains an OAuth2AuthorizedClient for the given request.
 	Authorize(request *OAuth2AuthorizeRequest) (*OAuth2AuthorizedClient, Error)
 }
 
@@ -41,6 +44,7 @@ type DefaultOAuth2AuthorizedClientManager struct {
 	providers              []OAuth2AuthorizedClientProvider
 }
 
+// New creates a new DefaultOAuth2AuthorizedClientManager with the given repositories and optional providers.
 func (this DefaultOAuth2AuthorizedClientManager) New(
 	clientRepo ClientRegistrationRepository,
 	clientService OAuth2AuthorizedClientService,
@@ -58,6 +62,7 @@ func (this DefaultOAuth2AuthorizedClientManager) New(
 	return &this
 }
 
+// NewDefaultOAuth2AuthorizedClientManager creates a new DefaultOAuth2AuthorizedClientManager.
 func NewDefaultOAuth2AuthorizedClientManager(
 	clientRepo ClientRegistrationRepository,
 	clientService OAuth2AuthorizedClientService,
@@ -66,6 +71,7 @@ func NewDefaultOAuth2AuthorizedClientManager(
 	return DefaultOAuth2AuthorizedClientManager{}.New(clientRepo, clientService, providers...)
 }
 
+// Authorize loads an existing valid OAuth2AuthorizedClient or delegates to a supporting OAuth2AuthorizedClientProvider.
 func (this *DefaultOAuth2AuthorizedClientManager) Authorize(request *OAuth2AuthorizeRequest) (*OAuth2AuthorizedClient, Error) {
 	if request.ClientRegistration == nil {
 		if request.ClientRegistrationID == "" {
@@ -121,6 +127,7 @@ type RefreshTokenAuthorizedClientProvider struct {
 	clockSkew  time.Duration
 }
 
+// New creates a new RefreshTokenAuthorizedClientProvider using the provided HTTP client (or a default client with a 30s timeout).
 func (this RefreshTokenAuthorizedClientProvider) New(client *http.Client) *RefreshTokenAuthorizedClientProvider {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -130,10 +137,12 @@ func (this RefreshTokenAuthorizedClientProvider) New(client *http.Client) *Refre
 	return &this
 }
 
+// NewRefreshTokenAuthorizedClientProvider creates a new RefreshTokenAuthorizedClientProvider.
 func NewRefreshTokenAuthorizedClientProvider(client *http.Client) *RefreshTokenAuthorizedClientProvider {
 	return RefreshTokenAuthorizedClientProvider{}.New(client)
 }
 
+// Supports reports whether the request has an existing authorized client with a refresh token and a missing or expiring access token.
 func (this *RefreshTokenAuthorizedClientProvider) Supports(request *OAuth2AuthorizeRequest) bool {
 	if request.AuthorizedClient == nil || request.AuthorizedClient.RefreshToken == nil {
 		return false
@@ -149,6 +158,7 @@ func (this *RefreshTokenAuthorizedClientProvider) Supports(request *OAuth2Author
 	return false
 }
 
+// Authorize exchanges the authorized client's refresh token for a new access token at the provider's token endpoint.
 func (this *RefreshTokenAuthorizedClientProvider) Authorize(request *OAuth2AuthorizeRequest) (*OAuth2AuthorizedClient, Error) {
 	reg := request.ClientRegistration
 	refreshToken := request.AuthorizedClient.RefreshToken
@@ -232,6 +242,7 @@ type ClientCredentialsAuthorizedClientProvider struct {
 	httpClient *http.Client
 }
 
+// New creates a new ClientCredentialsAuthorizedClientProvider using the provided HTTP client (or a default client with a 30s timeout).
 func (this ClientCredentialsAuthorizedClientProvider) New(client *http.Client) *ClientCredentialsAuthorizedClientProvider {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -240,10 +251,12 @@ func (this ClientCredentialsAuthorizedClientProvider) New(client *http.Client) *
 	return &this
 }
 
+// NewClientCredentialsAuthorizedClientProvider creates a new ClientCredentialsAuthorizedClientProvider.
 func NewClientCredentialsAuthorizedClientProvider(client *http.Client) *ClientCredentialsAuthorizedClientProvider {
 	return ClientCredentialsAuthorizedClientProvider{}.New(client)
 }
 
+// Supports reports whether the request's client registration is configured for the client_credentials grant type.
 func (this *ClientCredentialsAuthorizedClientProvider) Supports(request *OAuth2AuthorizeRequest) bool {
 	if request.ClientRegistration == nil {
 		return false
@@ -251,6 +264,7 @@ func (this *ClientCredentialsAuthorizedClientProvider) Supports(request *OAuth2A
 	return request.ClientRegistration.AuthorizationGrantType == GrantTypeClientCredentials
 }
 
+// Authorize executes the OAuth 2.0 client_credentials grant against the provider's token endpoint.
 func (this *ClientCredentialsAuthorizedClientProvider) Authorize(request *OAuth2AuthorizeRequest) (*OAuth2AuthorizedClient, Error) {
 	reg := request.ClientRegistration
 

@@ -6,6 +6,7 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/lang"
 )
 
+// SetInjectedDepsForTest injects dependencies into OAuth2AuthorizationServerFilter for testing.
 func (this *OAuth2AuthorizationServerFilter) SetInjectedDepsForTest(
 	clientRepo RegisteredClientRepository,
 	holder SecurityContextHolder,
@@ -34,6 +35,7 @@ func (this *OAuth2AuthorizationServerFilter) SetInjectedDepsForTest(
 	}
 }
 
+// ServerFilterDeps holds the internal dependencies of OAuth2AuthorizationServerFilter for test inspection.
 type ServerFilterDeps struct {
 	ClientRepo     RegisteredClientRepository
 	ContextHolder  SecurityContextHolder
@@ -43,6 +45,7 @@ type ServerFilterDeps struct {
 	Settings       *AuthorizationServerSettings
 }
 
+// GetDepsForTest returns the configured internal dependencies of OAuth2AuthorizationServerFilter for test assertions.
 func (this *OAuth2AuthorizationServerFilter) GetDepsForTest() *ServerFilterDeps {
 	return &ServerFilterDeps{
 		ClientRepo:     this.clientRepo,

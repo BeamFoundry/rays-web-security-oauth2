@@ -1,3 +1,4 @@
+// Package keycloak_test contains end-to-end integration tests against a containerized Keycloak identity provider.
 package keycloak_test
 
 import (
@@ -20,6 +21,7 @@ import (
 	keycloak "github.com/stillya/testcontainers-keycloak"
 )
 
+// TestKeycloak runs the Ginkgo integration test suite against Keycloak.
 func TestKeycloak(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Keycloak Integration Suite")
@@ -31,6 +33,7 @@ var (
 	realmName         = "rays-realm"
 )
 
+// startKeycloak launches a Keycloak testcontainer pre-configured with the test realm.
 func startKeycloak() {
 	ctx := context.Background()
 	realmAbs, err := filepath.Abs("testdata/realm-rays.json")
@@ -50,6 +53,7 @@ func startKeycloak() {
 	Expect(keycloakBaseURL).NotTo(BeEmpty())
 }
 
+// stopKeycloak terminates the running Keycloak testcontainer if present.
 func stopKeycloak() {
 	if keycloakContainer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -60,6 +64,7 @@ func stopKeycloak() {
 	}
 }
 
+// KeycloakTokens holds the OAuth2 and OIDC tokens returned by the Keycloak token endpoint.
 type KeycloakTokens struct {
 	AccessToken      string `json:"access_token"`
 	RefreshToken     string `json:"refresh_token"`
@@ -70,7 +75,7 @@ type KeycloakTokens struct {
 	RefreshExpiresIn int64  `json:"refresh_expires_in"`
 }
 
-// Helper to obtain full token set from Keycloak via Resource Owner Password Credentials
+// obtainUserTokens obtains a full token set from Keycloak via Resource Owner Password Credentials.
 func obtainUserTokens(username, password string) (*KeycloakTokens, error) {
 	tokenURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", keycloakBaseURL, realmName)
 	data := url.Values{
@@ -113,7 +118,7 @@ func obtainUserTokens(username, password string) (*KeycloakTokens, error) {
 	return &res, nil
 }
 
-// Helper to obtain a user access token from Keycloak
+// obtainUserToken obtains a user access token from Keycloak.
 func obtainUserToken(username, password string) (string, error) {
 	tokens, err := obtainUserTokens(username, password)
 	if err != nil {

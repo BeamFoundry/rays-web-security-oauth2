@@ -57,6 +57,7 @@ var (
 	_    BeamPostConstructWithContext = &OAuth2AuthorizationServerFilter{}
 )
 
+// New creates a new OAuth2AuthorizationServerFilter with the provided settings, repositories, services, and key source.
 func (this OAuth2AuthorizationServerFilter) New(
 	settings *AuthorizationServerSettings,
 	clientRepo RegisteredClientRepository,
@@ -74,6 +75,7 @@ func (this OAuth2AuthorizationServerFilter) New(
 	return &this
 }
 
+// NewOAuth2AuthorizationServerFilter creates a new OAuth2AuthorizationServerFilter.
 func NewOAuth2AuthorizationServerFilter(
 	settings *AuthorizationServerSettings,
 	clientRepo RegisteredClientRepository,
@@ -85,6 +87,7 @@ func NewOAuth2AuthorizationServerFilter(
 	return OAuth2AuthorizationServerFilter{}.New(settings, clientRepo, authService, tokenGen, jwkSource, contextHolder)
 }
 
+// Config returns the supplied OAuth2AuthorizationServerConfig or a lazily created snapshot of the filter's fields, not necessarily the effective configuration after WithContext injects dependencies.
 func (this *OAuth2AuthorizationServerFilter) Config() *OAuth2AuthorizationServerConfig {
 	if this.config == nil {
 		this.config = &OAuth2AuthorizationServerConfig{
@@ -197,6 +200,7 @@ func (this *OAuth2AuthorizationServerFilter) RegisterSecurityEndpoint(router Sec
 	router.Post(this.settings.TokenRevocationEndpoint, this.handleRevoke)
 }
 
+// handleAuthorize processes OAuth 2.0 authorization requests at the authorization endpoint.
 func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHandler) error {
 	q := handler.URL().Query()
 	clientID := q.Get("client_id")
@@ -317,6 +321,7 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 	return handler.Redirect(targetURL.String(), http.StatusFound)
 }
 
+// isPublicClient reports whether the registered client is a public client that authenticates with "none" and has no secret-based authentication method.
 func isPublicClient(client *RegisteredClient) bool {
 	if len(client.ClientAuthenticationMethods) > 0 {
 		return slices.Contains(client.ClientAuthenticationMethods, ClientAuthMethodNone) &&
@@ -326,6 +331,7 @@ func isPublicClient(client *RegisteredClient) bool {
 	return client.ClientSecret == ""
 }
 
+// authenticateClient extracts and verifies client credentials from HTTP Basic auth or form parameters.
 func (this *OAuth2AuthorizationServerFilter) authenticateClient(handler SecurityHandler) (*RegisteredClient, Error) {
 	clientID := handler.FormValue("client_id")
 	clientSecret := handler.FormValue("client_secret")
@@ -363,6 +369,7 @@ func (this *OAuth2AuthorizationServerFilter) authenticateClient(handler Security
 	return client, nil
 }
 
+// handleToken processes OAuth 2.0 token requests at the token endpoint and dispatches by grant_type.
 func (this *OAuth2AuthorizationServerFilter) handleToken(handler SecurityHandler) error {
 	grantType := handler.FormValue("grant_type")
 
@@ -390,6 +397,7 @@ func (this *OAuth2AuthorizationServerFilter) handleToken(handler SecurityHandler
 	}
 }
 
+// handleAuthorizationCodeGrant validates an authorization code, redirect URI, and PKCE verifier, and issues access and refresh tokens.
 func (this *OAuth2AuthorizationServerFilter) handleAuthorizationCodeGrant(handler SecurityHandler, client *RegisteredClient) error {
 	code := handler.FormValue(OAuth2ParameterCode)
 	redirectURI := handler.FormValue("redirect_uri")
@@ -440,6 +448,7 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorizationCodeGrant(handle
 	return this.sendTokenSuccess(handler, accessToken, refreshToken)
 }
 
+// handleClientCredentialsGrant executes the client_credentials grant and issues an access token for the authenticated client.
 func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handler SecurityHandler, client *RegisteredClient) error {
 	hasGrant := slices.Contains(client.AuthorizationGrantTypes, GrantTypeClientCredentials)
 	if !hasGrant {
@@ -473,6 +482,7 @@ func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handle
 	return this.sendTokenSuccess(handler, accessToken, nil)
 }
 
+// handleRefreshTokenGrant consumes a refresh token and issues rotated access and refresh tokens.
 func (this *OAuth2AuthorizationServerFilter) handleRefreshTokenGrant(handler SecurityHandler, client *RegisteredClient) error {
 	if !slices.Contains(client.AuthorizationGrantTypes, GrantTypeRefreshToken) {
 		return this.sendTokenError(handler, OAuth2ErrorInvalidGrant, "Client not registered for refresh_token grant")
@@ -510,6 +520,7 @@ func (this *OAuth2AuthorizationServerFilter) handleRefreshTokenGrant(handler Sec
 	return this.sendTokenSuccess(handler, accessToken, outRefreshToken)
 }
 
+// handleJWKS serves the public JSON Web Key Set at the JWKS endpoint.
 func (this *OAuth2AuthorizationServerFilter) handleJWKS(handler SecurityHandler) error {
 	jwkSet, err := this.jwkSource.GetJWKSet()
 	if err != nil {
@@ -528,6 +539,7 @@ func (this *OAuth2AuthorizationServerFilter) handleJWKS(handler SecurityHandler)
 	return nil
 }
 
+// handleDiscovery serves OAuth 2.0 Authorization Server / OpenID Provider metadata at the discovery endpoint.
 func (this *OAuth2AuthorizationServerFilter) handleDiscovery(handler SecurityHandler) error {
 	meta := map[string]any{
 		"issuer":                                this.settings.Issuer,
@@ -555,6 +567,7 @@ func (this *OAuth2AuthorizationServerFilter) handleDiscovery(handler SecurityHan
 	return nil
 }
 
+// handleIntrospect processes RFC 7662 token introspection requests.
 func (this *OAuth2AuthorizationServerFilter) handleIntrospect(handler SecurityHandler) error {
 	_, err := this.authenticateClient(handler)
 	if err != nil {
@@ -595,6 +608,7 @@ func (this *OAuth2AuthorizationServerFilter) handleIntrospect(handler SecurityHa
 	return nil
 }
 
+// handleRevoke processes RFC 7009 token revocation requests for access or refresh tokens owned by the authenticated client.
 func (this *OAuth2AuthorizationServerFilter) handleRevoke(handler SecurityHandler) error {
 	client, err := this.authenticateClient(handler)
 	if err != nil {
@@ -639,6 +653,7 @@ func (this *OAuth2AuthorizationServerFilter) handleRevoke(handler SecurityHandle
 	return nil
 }
 
+// sendTokenSuccess writes a successful RFC 6749 JSON token response with no-store cache headers.
 func (this *OAuth2AuthorizationServerFilter) sendTokenSuccess(handler SecurityHandler, access *OAuth2AccessToken, refresh *OAuth2RefreshToken) error {
 	handler.SetHeader("Content-Type", "application/json")
 	handler.SetHeader("Cache-Control", "no-store")
@@ -671,6 +686,7 @@ func (this *OAuth2AuthorizationServerFilter) sendTokenSuccess(handler SecurityHa
 	return nil
 }
 
+// sendTokenError writes an RFC 6749 JSON error response with HTTP 400 Bad Request status.
 func (this *OAuth2AuthorizationServerFilter) sendTokenError(handler SecurityHandler, errCode, errDesc string) error {
 	handler.SetHeader("Content-Type", "application/json")
 	resp := map[string]string{

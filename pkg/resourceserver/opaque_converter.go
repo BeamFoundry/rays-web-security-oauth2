@@ -11,6 +11,7 @@ import (
 
 // OpaqueTokenAuthenticationConverter converts an introspected token and principal into an authenticated Authentication
 type OpaqueTokenAuthenticationConverter interface {
+	// Convert constructs an authenticated Authentication from the raw opaque token and introspected principal.
 	Convert(token string, principal OAuth2AuthenticatedPrincipal) (Authentication, Error)
 }
 
@@ -19,14 +20,17 @@ type DefaultOpaqueTokenAuthenticationConverter struct{}
 
 var _ OpaqueTokenAuthenticationConverter = &DefaultOpaqueTokenAuthenticationConverter{}
 
+// New creates a new DefaultOpaqueTokenAuthenticationConverter.
 func (this DefaultOpaqueTokenAuthenticationConverter) New() *DefaultOpaqueTokenAuthenticationConverter {
 	return &this
 }
 
+// NewDefaultOpaqueTokenAuthenticationConverter creates a new DefaultOpaqueTokenAuthenticationConverter.
 func NewDefaultOpaqueTokenAuthenticationConverter() *DefaultOpaqueTokenAuthenticationConverter {
 	return DefaultOpaqueTokenAuthenticationConverter{}.New()
 }
 
+// Convert wraps the introspected OAuth2AuthenticatedPrincipal and OAuth2AccessToken into a BearerTokenAuthentication.
 func (this *DefaultOpaqueTokenAuthenticationConverter) Convert(token string, principal OAuth2AuthenticatedPrincipal) (Authentication, Error) {
 	if principal == nil {
 		return nil, NewError("IllegalArgumentException", "principal cannot be nil")
@@ -61,6 +65,7 @@ func (this *DefaultOpaqueTokenAuthenticationConverter) Convert(token string, pri
 	return NewBearerTokenAuthentication(principal, accessToken, authorities), nil
 }
 
+// parseScopes extracts individual scope strings from a space-delimited string or slice claim value.
 func parseScopes(val any) []string {
 	var scopes []string
 	switch v := val.(type) {

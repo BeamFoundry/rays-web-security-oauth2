@@ -1,3 +1,4 @@
+// Package resourceserver_test contains unit tests for OAuth 2.0 resource server JWT and opaque token authentication.
 package resourceserver_test
 
 import (
@@ -25,16 +26,19 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestResourceServer runs the Ginkgo test suite for the OAuth2 resource server package.
 func TestResourceServer(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 Resource Server Suite")
 }
 
+// mockAuthManager is a test double for AuthenticationManager with an optional custom authenticate callback.
 type mockAuthManager struct {
 	Manager
 	authenticateFunc func(Authentication) (Authentication, AuthenticationException)
 }
 
+// Authenticate invokes authenticateFunc if set, or returns the supplied Authentication unchanged.
 func (this *mockAuthManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
 	if this.authenticateFunc != nil {
 		return this.authenticateFunc(auth)
@@ -42,25 +46,38 @@ func (this *mockAuthManager) Authenticate(auth Authentication) (Authentication, 
 	return auth, nil
 }
 
+// mockSecurityContext is an in-memory test double for SecurityContext.
 type mockSecurityContext struct {
 	auth  Authentication
 	debug string
 }
 
-func (this *mockSecurityContext) GetAuthentication() Authentication    { return this.auth }
-func (this *mockSecurityContext) SetAuthentication(a Authentication)   { this.auth = a }
-func (this *mockSecurityContext) SetHTTPPolicyDebugValue(debug string) { this.debug = debug }
-func (this *mockSecurityContext) GetHTTPPolicyDebugValue() string      { return this.debug }
+// GetAuthentication returns the stored Authentication.
+func (this *mockSecurityContext) GetAuthentication() Authentication { return this.auth }
 
+// SetAuthentication sets the current Authentication in the context.
+func (this *mockSecurityContext) SetAuthentication(a Authentication) { this.auth = a }
+
+// SetHTTPPolicyDebugValue sets the HTTP policy debug string.
+func (this *mockSecurityContext) SetHTTPPolicyDebugValue(debug string) { this.debug = debug }
+
+// GetHTTPPolicyDebugValue returns the HTTP policy debug string.
+func (this *mockSecurityContext) GetHTTPPolicyDebugValue() string { return this.debug }
+
+// mockSecurityContextHolder is an in-memory test double for SecurityContextHolder.
 type mockSecurityContextHolder struct {
 	ctx SecurityContext
 }
 
+// ClearContext resets the stored SecurityContext to nil.
 func (this *mockSecurityContextHolder) ClearContext() { this.ctx = nil }
+
+// SetContext stores the given SecurityContext.
 func (this *mockSecurityContextHolder) SetContext(sc SecurityContext) {
 	this.ctx = sc
 }
 
+// GetContext returns the current SecurityContext, lazily initializing one if nil.
 func (this *mockSecurityContextHolder) GetContext() SecurityContext {
 	if this.ctx == nil {
 		this.ctx = &mockSecurityContext{}
@@ -616,27 +633,45 @@ var _ = Describe("ResourceServer Additional Coverage", func() {
 	})
 })
 
+// failingJwtConverter is a JwtAuthenticationConverter test double that always returns an error.
 type failingJwtConverter struct{}
 
+// Convert returns a simulated JWT conversion error.
 func (this *failingJwtConverter) Convert(_ *Jwt) (*JwtAuthenticationToken, Error) {
 	return nil, NewError("ConversionError", "conversion failed")
 }
 
+// failingOpaqueConverter is an OpaqueTokenAuthenticationConverter test double that always returns an error.
 type failingOpaqueConverter struct{}
 
+// Convert returns a simulated opaque token conversion error.
 func (this *failingOpaqueConverter) Convert(_ string, _ OAuth2AuthenticatedPrincipal) (Authentication, Error) {
 	return nil, NewError("ConversionError", "opaque conversion failed")
 }
 
+// mockSimpleAuth is a minimal Authentication test double used for testing non-bearer token inputs.
 type mockSimpleAuth struct{}
 
+// GetAuthorities returns nil authorities.
 func (this *mockSimpleAuth) GetAuthorities() []GrantedAuthority { return nil }
-func (this *mockSimpleAuth) GetCredentials() any                { return nil }
-func (this *mockSimpleAuth) GetDetails() any                    { return nil }
-func (this *mockSimpleAuth) GetPrincipal() any                  { return nil }
-func (this *mockSimpleAuth) IsAuthenticated() bool              { return false }
-func (this *mockSimpleAuth) SetAuthenticated(_ bool)            {}
-func (this *mockSimpleAuth) GetName() string                    { return "simple" }
+
+// GetCredentials returns nil credentials.
+func (this *mockSimpleAuth) GetCredentials() any { return nil }
+
+// GetDetails returns nil details.
+func (this *mockSimpleAuth) GetDetails() any { return nil }
+
+// GetPrincipal returns nil principal.
+func (this *mockSimpleAuth) GetPrincipal() any { return nil }
+
+// IsAuthenticated returns false.
+func (this *mockSimpleAuth) IsAuthenticated() bool { return false }
+
+// SetAuthenticated is a no-op.
+func (this *mockSimpleAuth) SetAuthenticated(_ bool) {}
+
+// GetName returns the fixed name "simple".
+func (this *mockSimpleAuth) GetName() string { return "simple" }
 
 var _ = Describe("NimbusOpaqueTokenIntrospector", func() {
 	It("successfully introspects an active token and returns OAuth2AuthenticatedPrincipal", func() {
@@ -1810,8 +1845,10 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 	})
 })
 
+// mockFailingJwtDecoder is a JwtDecoder test double that always returns an invalid signature error.
 type mockFailingJwtDecoder struct{}
 
+// Decode returns a simulated JwtError.
 func (this *mockFailingJwtDecoder) Decode(_ string) (*Jwt, Error) {
 	return nil, NewError("JwtError", "invalid signature")
 }

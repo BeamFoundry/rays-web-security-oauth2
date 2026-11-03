@@ -9,6 +9,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/login"
 )
 
+// FuzzBuildAuthorizationURI fuzzes BuildAuthorizationURI with arbitrary authorization request parameters.
 func FuzzBuildAuthorizationURI(f *testing.F) {
 	// Seed corpus
 	f.Add("https://accounts.google.com/o/oauth2/v2/auth", "client-123", "https://app.com/callback", "state-abc", "S256")

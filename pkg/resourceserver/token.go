@@ -17,6 +17,7 @@ type BearerTokenAuthenticationToken struct {
 
 var _ Authentication = &BearerTokenAuthenticationToken{}
 
+// New creates a new unauthenticated BearerTokenAuthenticationToken wrapping the raw bearer token string.
 func (this BearerTokenAuthenticationToken) New(token string) *BearerTokenAuthenticationToken {
 	this.Token = token
 	this.Principal = ""
@@ -24,10 +25,12 @@ func (this BearerTokenAuthenticationToken) New(token string) *BearerTokenAuthent
 	return &this
 }
 
+// NewBearerTokenAuthenticationToken creates a new unauthenticated BearerTokenAuthenticationToken.
 func NewBearerTokenAuthenticationToken(token string) *BearerTokenAuthenticationToken {
 	return BearerTokenAuthenticationToken{}.New(token)
 }
 
+// GetCredentials returns the raw bearer token string.
 func (this *BearerTokenAuthenticationToken) GetCredentials() any {
 	return this.Token
 }
@@ -41,6 +44,7 @@ type JwtAuthenticationToken struct {
 
 var _ Authentication = &JwtAuthenticationToken{}
 
+// New creates a new authenticated JwtAuthenticationToken for the given validated Jwt, authorities, and principal name.
 func (this JwtAuthenticationToken) New(
 	token *Jwt,
 	authorities []GrantedAuthority,
@@ -54,6 +58,7 @@ func (this JwtAuthenticationToken) New(
 	return &this
 }
 
+// NewJwtAuthenticationToken creates a new authenticated JwtAuthenticationToken.
 func NewJwtAuthenticationToken(
 	token *Jwt,
 	authorities []GrantedAuthority,
@@ -62,6 +67,7 @@ func NewJwtAuthenticationToken(
 	return JwtAuthenticationToken{}.New(token, authorities, name)
 }
 
+// GetName returns the configured principal name, or falls back to the JWT's "sub" claim.
 func (this *JwtAuthenticationToken) GetName() string {
 	if this.Name != "" {
 		return this.Name
@@ -72,6 +78,7 @@ func (this *JwtAuthenticationToken) GetName() string {
 	return ""
 }
 
+// GetCredentials returns the raw encoded JWT string, or an empty string if nil.
 func (this *JwtAuthenticationToken) GetCredentials() any {
 	if this.Jwt != nil {
 		return this.Jwt.TokenValue
@@ -88,6 +95,7 @@ type BearerTokenAuthentication struct {
 
 var _ Authentication = &BearerTokenAuthentication{}
 
+// New creates a new authenticated BearerTokenAuthentication from an introspected principal, access token, and authorities.
 func (this BearerTokenAuthentication) New(
 	principal OAuth2AuthenticatedPrincipal,
 	token *OAuth2AccessToken,
@@ -103,6 +111,7 @@ func (this BearerTokenAuthentication) New(
 	return &this
 }
 
+// NewBearerTokenAuthentication creates a new authenticated BearerTokenAuthentication.
 func NewBearerTokenAuthentication(
 	principal OAuth2AuthenticatedPrincipal,
 	token *OAuth2AccessToken,
@@ -111,6 +120,7 @@ func NewBearerTokenAuthentication(
 	return BearerTokenAuthentication{}.New(principal, token, authorities)
 }
 
+// GetName returns the principal name of the authenticated bearer token principal.
 func (this *BearerTokenAuthentication) GetName() string {
 	if this.Principal == nil {
 		return ""
@@ -124,6 +134,7 @@ func (this *BearerTokenAuthentication) GetName() string {
 	return ""
 }
 
+// GetCredentials returns the raw access token value, or an empty string if nil.
 func (this *BearerTokenAuthentication) GetCredentials() any {
 	if this.Token != nil {
 		return this.Token.GetTokenValue()
@@ -131,14 +142,17 @@ func (this *BearerTokenAuthentication) GetCredentials() any {
 	return ""
 }
 
+// GetToken returns the OAuth2AccessToken associated with this authentication.
 func (this *BearerTokenAuthentication) GetToken() *OAuth2AccessToken {
 	return this.Token
 }
 
+// GetAttributes returns the token introspection attributes associated with this authentication.
 func (this *BearerTokenAuthentication) GetAttributes() map[string]any {
 	return this.Attributes
 }
 
+// init registers resource server authentication token types with encoding/gob.
 func init() {
 	gob.Register(&BearerTokenAuthenticationToken{})
 	gob.Register(&JwtAuthenticationToken{})

@@ -13,6 +13,7 @@ import (
 	. "github.com/BeamFoundry/rays/pkg/web"
 )
 
+// FuzzHandleAuthorizeRedirect supplies arbitrary redirect_uri and state values to the authorization endpoint and only fails on a panic.
 func FuzzHandleAuthorizeRedirect(f *testing.F) {
 	km, err := RSAKeyManager{}.New(2048, "fuzz-key")
 	if err != nil {

@@ -8,13 +8,17 @@ import (
 type TokenType string
 
 const (
+	// TokenTypeBearer represents the RFC 6750 Bearer token type.
 	TokenTypeBearer TokenType = "Bearer"
 )
 
 // OAuth2Token is the base interface for OAuth 2.0 tokens
 type OAuth2Token interface {
+	// GetTokenValue returns the raw string value of the token.
 	GetTokenValue() string
+	// GetIssuedAt returns the timestamp when the token was issued.
 	GetIssuedAt() time.Time
+	// GetExpiresAt returns the timestamp when the token expires.
 	GetExpiresAt() time.Time
 }
 
@@ -27,6 +31,7 @@ type OAuth2AccessToken struct {
 	Scopes     []string  `json:"scopes"`
 }
 
+// New creates a new OAuth2AccessToken with the specified type, value, timestamps, and scopes.
 func (this OAuth2AccessToken) New(tokenType TokenType, tokenValue string, issuedAt, expiresAt time.Time, scopes []string) *OAuth2AccessToken {
 	this.TokenType = tokenType
 	this.TokenValue = tokenValue
@@ -36,22 +41,27 @@ func (this OAuth2AccessToken) New(tokenType TokenType, tokenValue string, issued
 	return &this
 }
 
+// NewOAuth2AccessToken creates a new OAuth2AccessToken.
 func NewOAuth2AccessToken(tokenType TokenType, tokenValue string, issuedAt, expiresAt time.Time, scopes []string) *OAuth2AccessToken {
 	return OAuth2AccessToken{}.New(tokenType, tokenValue, issuedAt, expiresAt, scopes)
 }
 
+// GetTokenValue returns the raw access token value.
 func (this *OAuth2AccessToken) GetTokenValue() string {
 	return this.TokenValue
 }
 
+// GetIssuedAt returns the time at which the access token was issued.
 func (this *OAuth2AccessToken) GetIssuedAt() time.Time {
 	return this.IssuedAt
 }
 
+// GetExpiresAt returns the expiration time of the access token.
 func (this *OAuth2AccessToken) GetExpiresAt() time.Time {
 	return this.ExpiresAt
 }
 
+// IsExpired reports whether the access token has expired relative to the current time.
 func (this *OAuth2AccessToken) IsExpired() bool {
 	if this.ExpiresAt.IsZero() {
 		return false
@@ -67,6 +77,7 @@ type OAuth2RefreshToken struct {
 	Invalidated bool      `json:"invalidated,omitempty"`
 }
 
+// New creates a new OAuth2RefreshToken with the specified token value and timestamps.
 func (this OAuth2RefreshToken) New(tokenValue string, issuedAt, expiresAt time.Time) *OAuth2RefreshToken {
 	this.TokenValue = tokenValue
 	this.IssuedAt = issuedAt
@@ -75,18 +86,22 @@ func (this OAuth2RefreshToken) New(tokenValue string, issuedAt, expiresAt time.T
 	return &this
 }
 
+// NewOAuth2RefreshToken creates a new OAuth2RefreshToken.
 func NewOAuth2RefreshToken(tokenValue string, issuedAt, expiresAt time.Time) *OAuth2RefreshToken {
 	return OAuth2RefreshToken{}.New(tokenValue, issuedAt, expiresAt)
 }
 
+// GetTokenValue returns the raw refresh token value.
 func (this *OAuth2RefreshToken) GetTokenValue() string {
 	return this.TokenValue
 }
 
+// GetIssuedAt returns the time at which the refresh token was issued.
 func (this *OAuth2RefreshToken) GetIssuedAt() time.Time {
 	return this.IssuedAt
 }
 
+// GetExpiresAt returns the expiration time of the refresh token.
 func (this *OAuth2RefreshToken) GetExpiresAt() time.Time {
 	return this.ExpiresAt
 }

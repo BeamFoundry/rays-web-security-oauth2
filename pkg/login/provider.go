@@ -39,6 +39,7 @@ var (
 	_    BeamPostConstruct      = &OAuth2LoginAuthenticationProvider{}
 )
 
+// New creates a new OAuth2LoginAuthenticationProvider with the given HTTP client and user services.
 func (this OAuth2LoginAuthenticationProvider) New(
 	client *http.Client,
 	userService OAuth2UserService,
@@ -61,6 +62,7 @@ func (this OAuth2LoginAuthenticationProvider) New(
 	return &this
 }
 
+// NewOAuth2LoginAuthenticationProvider creates a new OAuth2LoginAuthenticationProvider.
 func NewOAuth2LoginAuthenticationProvider(
 	client *http.Client,
 	userService OAuth2UserService,
@@ -69,11 +71,13 @@ func NewOAuth2LoginAuthenticationProvider(
 	return OAuth2LoginAuthenticationProvider{}.New(client, userService, oidcUserService)
 }
 
+// WithJwtDecoder configures an explicit JwtDecoder for verifying OpenID Connect ID tokens.
 func (this *OAuth2LoginAuthenticationProvider) WithJwtDecoder(decoder JwtDecoder) *OAuth2LoginAuthenticationProvider {
 	this.jwtDecoder = decoder
 	return this
 }
 
+// PostConstruct initializes injected dependencies and default user services for the provider component.
 func (this *OAuth2LoginAuthenticationProvider) PostConstruct() Error {
 	if this.httpClient == nil {
 		this.httpClient = http.DefaultClient
@@ -100,6 +104,7 @@ func (this *OAuth2LoginAuthenticationProvider) PostConstruct() Error {
 	return nil
 }
 
+// getOrCreateDecoder returns the configured JwtDecoder or lazily creates and caches a remote JWKS decoder for the client registration.
 func (this *OAuth2LoginAuthenticationProvider) getOrCreateDecoder(reg *ClientRegistration) JwtDecoder {
 	if this.jwtDecoder != nil {
 		return this.jwtDecoder
@@ -142,11 +147,13 @@ func (this *OAuth2LoginAuthenticationProvider) getOrCreateDecoder(reg *ClientReg
 	return jwxDec
 }
 
+// Supports reports whether the given Authentication is an OAuth2LoginAuthenticationToken.
 func (this *OAuth2LoginAuthenticationProvider) Supports(auth Authentication) bool {
 	_, ok := auth.(*OAuth2LoginAuthenticationToken)
 	return ok
 }
 
+// Authenticate exchanges the authorization code for tokens, verifies any OIDC ID token, loads the user profile, and returns an authenticated OAuth2AuthenticationToken.
 func (this *OAuth2LoginAuthenticationProvider) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
 	loginToken, ok := auth.(*OAuth2LoginAuthenticationToken)
 	if !ok {
@@ -296,6 +303,7 @@ func (this *OAuth2LoginAuthenticationProvider) Authenticate(auth Authentication)
 	return result, nil
 }
 
+// tokenEndpointResponse represents the JSON payload returned by an OAuth 2.0 / OIDC token endpoint.
 type tokenEndpointResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
@@ -305,6 +313,7 @@ type tokenEndpointResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
+// exchangeCodeForTokens sends an authorization_code grant request to the provider's token endpoint and decodes the response.
 func (this *OAuth2LoginAuthenticationProvider) exchangeCodeForTokens(
 	reg *ClientRegistration,
 	exchange OAuth2AuthorizationExchange,

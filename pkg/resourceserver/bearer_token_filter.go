@@ -22,6 +22,7 @@ type BearerTokenConfig struct {
 	RealmName               string
 }
 
+// bearerAuthenticationManager delegates bearer token authentication across configured JWT, opaque token, and fallback providers.
 type bearerAuthenticationManager struct {
 	Manager
 	jwtProvider    *JwtAuthenticationProvider
@@ -29,6 +30,7 @@ type bearerAuthenticationManager struct {
 	fallback       AuthenticationManager
 }
 
+// Authenticate attempts authentication using the configured JwtAuthenticationProvider, OpaqueTokenAuthenticationProvider, or fallback AuthenticationManager.
 func (this *bearerAuthenticationManager) Authenticate(auth Authentication) (Authentication, AuthenticationException) {
 	if this.jwtProvider != nil && this.jwtProvider.Supports(auth) {
 		res, err := this.jwtProvider.Authenticate(auth)
@@ -80,6 +82,7 @@ var (
 	_    BeamPostConstructWithContext = &BearerTokenAuthenticationFilter{}
 )
 
+// New creates a new BearerTokenAuthenticationFilter with a DefaultBearerTokenResolver and default realm name.
 func (this BearerTokenAuthenticationFilter) New(
 	authManager AuthenticationManager,
 	contextHolder SecurityContextHolder,
@@ -91,6 +94,7 @@ func (this BearerTokenAuthenticationFilter) New(
 	return &this
 }
 
+// NewBearerTokenAuthenticationFilter creates a new BearerTokenAuthenticationFilter.
 func NewBearerTokenAuthenticationFilter(
 	authManager AuthenticationManager,
 	contextHolder SecurityContextHolder,
@@ -98,26 +102,31 @@ func NewBearerTokenAuthenticationFilter(
 	return BearerTokenAuthenticationFilter{}.New(authManager, contextHolder)
 }
 
+// WithTokenResolver sets the BearerTokenResolver used to extract bearer tokens from requests.
 func (this *BearerTokenAuthenticationFilter) WithTokenResolver(resolver BearerTokenResolver) *BearerTokenAuthenticationFilter {
 	this.tokenResolver = resolver
 	return this
 }
 
+// WithRealmName sets the realm name included in WWW-Authenticate challenge headers.
 func (this *BearerTokenAuthenticationFilter) WithRealmName(realm string) *BearerTokenAuthenticationFilter {
 	this.realmName = realm
 	return this
 }
 
+// WithJwtDecoder configures a JwtDecoder for JWT bearer token verification.
 func (this *BearerTokenAuthenticationFilter) WithJwtDecoder(decoder JwtDecoder) *BearerTokenAuthenticationFilter {
 	this.jwtDecoder = decoder
 	return this
 }
 
+// WithOpaqueTokenIntrospector configures an OpaqueTokenIntrospector for RFC 7662 opaque token verification.
 func (this *BearerTokenAuthenticationFilter) WithOpaqueTokenIntrospector(introspector OpaqueTokenIntrospector) *BearerTokenAuthenticationFilter {
 	this.opaqueTokenIntrospector = introspector
 	return this
 }
 
+// Config returns the supplied BearerTokenConfig or a lazily created snapshot of the filter's fields, not necessarily the effective configuration after WithContext injects dependencies.
 func (this *BearerTokenAuthenticationFilter) Config() *BearerTokenConfig {
 	if this.config == nil {
 		this.config = &BearerTokenConfig{

@@ -1,3 +1,4 @@
+// Package jwt_test contains unit and fuzz tests for JWT and JWK encoding, decoding, and key management.
 package jwt_test
 
 import (
@@ -26,6 +27,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// TestJwt runs the Ginkgo test suite for the OAuth2 JWT package.
 func TestJwt(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "OAuth2 JWT Suite")
@@ -610,20 +612,25 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 	})
 })
 
+// testMockJWKSource is a test double for JWKSource that returns a configured secret and algorithm.
 type testMockJWKSource struct {
 	secret any
 	alg    string
 }
 
+// GetJWKSet returns an empty JWKSet for testing.
 func (this *testMockJWKSource) GetJWKSet() (*JWKSet, Error) {
 	return &JWKSet{}, nil
 }
 
+// GetSigningKey returns the configured test signing key and algorithm.
+//
 //nolint:revive // JWKSource interface requires 4 return values
 func (this *testMockJWKSource) GetSigningKey() (kid string, privateKey any, alg string, err Error) {
 	return "hmac-1", this.secret, this.alg, nil
 }
 
+// GetVerificationKey returns the configured test verification key and algorithm.
 func (this *testMockJWKSource) GetVerificationKey(_ string) (publicKey any, alg string, err Error) {
 	return this.secret, this.alg, nil
 }

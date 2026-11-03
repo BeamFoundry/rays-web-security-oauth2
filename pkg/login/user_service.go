@@ -19,10 +19,12 @@ type OAuth2UserRequest struct {
 	AdditionalParams   map[string]any
 }
 
-// OAuth2UserService loads user attributes from an OAuth2 provider UserInfo endpoint
+// subClaimName is the standard OpenID Connect subject identifier claim name.
 const subClaimName = "sub"
 
+// OAuth2UserService loads user attributes from an OAuth2 provider UserInfo endpoint
 type OAuth2UserService interface {
+	// LoadUser retrieves an authenticated OAuth2User from the provider's UserInfo endpoint.
 	LoadUser(userRequest *OAuth2UserRequest) (OAuth2User, Error)
 }
 
@@ -31,6 +33,7 @@ type DefaultOAuth2UserService struct {
 	httpClient *http.Client
 }
 
+// New creates a new DefaultOAuth2UserService using the provided HTTP client (or http.DefaultClient if nil).
 func (this DefaultOAuth2UserService) New(client *http.Client) *DefaultOAuth2UserService {
 	if client == nil {
 		client = http.DefaultClient
@@ -39,10 +42,12 @@ func (this DefaultOAuth2UserService) New(client *http.Client) *DefaultOAuth2User
 	return &this
 }
 
+// NewDefaultOAuth2UserService creates a new DefaultOAuth2UserService.
 func NewDefaultOAuth2UserService(client *http.Client) *DefaultOAuth2UserService {
 	return DefaultOAuth2UserService{}.New(client)
 }
 
+// LoadUser queries the provider's UserInfo endpoint with the access token and constructs a DefaultOAuth2User.
 func (this *DefaultOAuth2UserService) LoadUser(userRequest *OAuth2UserRequest) (OAuth2User, Error) {
 	userInfoURI := userRequest.ClientRegistration.ProviderDetails.UserInfoURI
 	if userInfoURI == "" {
@@ -107,6 +112,7 @@ type OidcUserRequest struct {
 
 // OidcUserService loads user attributes for OpenID Connect users
 type OidcUserService interface {
+	// LoadUser constructs an authenticated OidcUser from the ID token and optional UserInfo endpoint.
 	LoadUser(userRequest *OidcUserRequest) (OidcUser, Error)
 }
 
@@ -115,6 +121,7 @@ type DefaultOidcUserService struct {
 	oauth2UserService OAuth2UserService
 }
 
+// New creates a new DefaultOidcUserService delegating UserInfo requests to the provided OAuth2UserService.
 func (this DefaultOidcUserService) New(oauth2UserService OAuth2UserService) *DefaultOidcUserService {
 	if oauth2UserService == nil {
 		oauth2UserService = DefaultOAuth2UserService{}.New(nil)
@@ -123,10 +130,12 @@ func (this DefaultOidcUserService) New(oauth2UserService OAuth2UserService) *Def
 	return &this
 }
 
+// NewDefaultOidcUserService creates a new DefaultOidcUserService.
 func NewDefaultOidcUserService(oauth2UserService OAuth2UserService) *DefaultOidcUserService {
 	return DefaultOidcUserService{}.New(oauth2UserService)
 }
 
+// LoadUser validates the ID token subject claim, optionally fetches UserInfo claims, and returns a DefaultOidcUser.
 func (this *DefaultOidcUserService) LoadUser(userRequest *OidcUserRequest) (OidcUser, Error) {
 	authorities := []GrantedAuthority{Authority("ROLE_USER")}
 	for _, scope := range userRequest.AccessToken.Scopes {

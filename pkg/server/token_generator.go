@@ -15,6 +15,7 @@ import (
 
 // OAuth2TokenGenerator generates access and refresh tokens
 type OAuth2TokenGenerator interface {
+	// Generate issues a new OAuth2AccessToken and optional OAuth2RefreshToken for the given authorization and client.
 	Generate(authorization *OAuth2Authorization, client *RegisteredClient) (*OAuth2AccessToken, *OAuth2RefreshToken, Error)
 }
 
@@ -24,16 +25,19 @@ type JwtOAuth2TokenGenerator struct {
 	issuer     string
 }
 
+// New creates a new JwtOAuth2TokenGenerator with the given JwtEncoder and issuer identifier.
 func (this JwtOAuth2TokenGenerator) New(encoder JwtEncoder, issuer string) *JwtOAuth2TokenGenerator {
 	this.jwtEncoder = encoder
 	this.issuer = issuer
 	return &this
 }
 
+// NewJwtOAuth2TokenGenerator creates a new JwtOAuth2TokenGenerator.
 func NewJwtOAuth2TokenGenerator(encoder JwtEncoder, issuer string) *JwtOAuth2TokenGenerator {
 	return JwtOAuth2TokenGenerator{}.New(encoder, issuer)
 }
 
+// Generate creates a signed JWT access token and, if the client supports refresh_token, a cryptographically random refresh token.
 func (this *JwtOAuth2TokenGenerator) Generate(authorization *OAuth2Authorization, client *RegisteredClient) (*OAuth2AccessToken, *OAuth2RefreshToken, Error) {
 	now := time.Now()
 

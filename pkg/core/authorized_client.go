@@ -8,6 +8,7 @@ type OAuth2AuthorizedClient struct {
 	PrincipalName      string              `json:"principal_name"`
 }
 
+// New creates a new OAuth2AuthorizedClient associating a client registration, principal, and tokens.
 func (this OAuth2AuthorizedClient) New(
 	registration *ClientRegistration,
 	principalName string,
@@ -21,6 +22,7 @@ func (this OAuth2AuthorizedClient) New(
 	return &this
 }
 
+// NewOAuth2AuthorizedClient creates a new OAuth2AuthorizedClient.
 func NewOAuth2AuthorizedClient(
 	registration *ClientRegistration,
 	principalName string,

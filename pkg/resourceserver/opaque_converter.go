@@ -57,25 +57,38 @@ func (this *DefaultOpaqueTokenAuthenticationConverter) Convert(token string, pri
 
 	var scopes []string
 	if scopeVal, exists := attrs[claimScope]; exists {
-		if s, ok := scopeVal.(string); ok {
-			scopes = strings.Fields(s)
-		}
-	} else if scpVal, scpExists := attrs[claimScp]; scpExists {
-		switch v := scpVal.(type) {
-		case string:
-			scopes = strings.Fields(v)
-		case []string:
-			scopes = v
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					scopes = append(scopes, s)
-				}
-			}
-		default:
+		scopes = parseScopes(scopeVal)
+	}
+	if len(scopes) == 0 {
+		if scpVal, scpExists := attrs[claimScp]; scpExists {
+			scopes = parseScopes(scpVal)
 		}
 	}
 
 	accessToken := NewOAuth2AccessToken(TokenTypeBearer, token, issuedAt, expiresAt, scopes)
 	return NewBearerTokenAuthentication(principal, accessToken, authorities), nil
+}
+
+func parseScopes(val any) []string {
+	var scopes []string
+	switch v := val.(type) {
+	case string:
+		scopes = strings.Fields(v)
+	case []string:
+		for _, s := range v {
+			for part := range strings.FieldsSeq(s) {
+				scopes = append(scopes, part)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				for part := range strings.FieldsSeq(s) {
+					scopes = append(scopes, part)
+				}
+			}
+		}
+	default:
+	}
+	return scopes
 }

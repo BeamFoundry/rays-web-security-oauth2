@@ -1098,6 +1098,57 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		bAuth3, ok := auth3.(*BearerTokenAuthentication)
 		Expect(ok).To(BeTrue())
 		Expect(bAuth3.GetToken().Scopes).To(ConsistOf("read", "custom"))
+
+		// scope as []string takes precedence over scp
+		attrsScopeSlice := map[string]any{
+			"sub":   "user-scope-slice",
+			"scope": []string{"scope-read", "scope-write"},
+			"scp":   []string{"ignored-scp"},
+		}
+		pScopeSlice := NewDefaultOAuth2AuthenticatedPrincipal("user-scope-slice", attrsScopeSlice, nil)
+		authScopeSlice, err := conv.Convert("raw-scope-slice", pScopeSlice)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthScopeSlice, ok := authScopeSlice.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthScopeSlice.GetToken().Scopes).To(ConsistOf("scope-read", "scope-write"))
+
+		// scope as []any
+		attrsScopeAny := map[string]any{
+			"sub":   "user-scope-any",
+			"scope": []any{"scope-a", "scope-b"},
+		}
+		pScopeAny := NewDefaultOAuth2AuthenticatedPrincipal("user-scope-any", attrsScopeAny, nil)
+		authScopeAny, err := conv.Convert("raw-scope-any", pScopeAny)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthScopeAny, ok := authScopeAny.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthScopeAny.GetToken().Scopes).To(ConsistOf("scope-a", "scope-b"))
+
+		// scope yielding no values falls back to scp
+		attrsScopeEmpty := map[string]any{
+			"sub":   "user-scope-empty",
+			"scope": "   ",
+			"scp":   []string{"fallback-scp"},
+		}
+		pScopeEmpty := NewDefaultOAuth2AuthenticatedPrincipal("user-scope-empty", attrsScopeEmpty, nil)
+		authScopeEmpty, err := conv.Convert("raw-scope-empty", pScopeEmpty)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthScopeEmpty, ok := authScopeEmpty.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthScopeEmpty.GetToken().Scopes).To(ConsistOf("fallback-scp"))
+
+		// scope non-slice/non-string falls back to scp
+		attrsScopeInvalid := map[string]any{
+			"sub":   "user-scope-invalid",
+			"scope": 99999,
+			"scp":   "scp-from-fallback",
+		}
+		pScopeInvalid := NewDefaultOAuth2AuthenticatedPrincipal("user-scope-invalid", attrsScopeInvalid, nil)
+		authScopeInvalid, err := conv.Convert("raw-scope-invalid", pScopeInvalid)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthScopeInvalid, ok := authScopeInvalid.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthScopeInvalid.GetToken().Scopes).To(ConsistOf("scp-from-fallback"))
 	})
 
 	It("validates HTTPS or loopback requirement on introspectionURI and prevents insecure redirects", func() {

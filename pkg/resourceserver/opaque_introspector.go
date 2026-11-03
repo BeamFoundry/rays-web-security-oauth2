@@ -119,6 +119,10 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	if valErr := validateIntrospectionURI(this.introspectionURI); valErr != nil {
 		return nil, valErr
 	}
+	configuredURL, parseErr := url.Parse(this.introspectionURI)
+	if parseErr != nil {
+		return nil, NewErrorFrom(parseErr)
+	}
 
 	timeout := this.timeout
 	if timeout <= 0 {
@@ -151,6 +155,9 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	secureClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if redirectErr := validateIntrospectionURI(req.URL.String()); redirectErr != nil {
 			return fmt.Errorf("insecure redirect in token introspection: %w", redirectErr)
+		}
+		if !isSameOrigin(req.URL, configuredURL) {
+			return errors.New("insecure redirect in token introspection: redirect scheme, host, or port differs from configured introspection URI")
 		}
 		if originalCheckRedirect != nil {
 			return originalCheckRedirect(req, via)
@@ -353,4 +360,33 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isSameOrigin(target, configured *url.URL) bool {
+	if target == nil || configured == nil {
+		return false
+	}
+	if !strings.EqualFold(target.Scheme, configured.Scheme) {
+		return false
+	}
+	if !strings.EqualFold(target.Hostname(), configured.Hostname()) {
+		return false
+	}
+	return effectivePort(target) == effectivePort(configured)
+}
+
+func effectivePort(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return ""
 }

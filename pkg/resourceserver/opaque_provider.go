@@ -109,7 +109,7 @@ func (this *OpaqueTokenAuthenticationProvider) Authenticate(auth Authentication)
 	if err != nil {
 		err.LogError()
 		return auth, OAuth2AuthenticationException{}.New(
-			OAuth2Error{ErrorCode: OAuth2ErrorInvalidToken, ErrorDescription: "claims conversion failed: " + err.Error()},
+			OAuth2Error{ErrorCode: OAuth2ErrorInvalidToken, ErrorDescription: "claims conversion failed"},
 			auth,
 		)
 	}

@@ -3,6 +3,7 @@ package resourceserver_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -935,6 +936,10 @@ var _ = Describe("OpaqueTokenAuthenticationProvider", func() {
 			WithConverter(&failingOpaqueConverter{})
 		_, err = failingProv.Authenticate(NewBearerTokenAuthenticationToken("tok"))
 		Expect(err).To(HaveOccurred())
+		oauthEx, isOAuthEx := err.(*OAuth2AuthenticationException)
+		Expect(isOAuthEx).To(BeTrue())
+		Expect(oauthEx.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthEx.OAuth2Error().ErrorDescription).To(Equal("claims conversion failed"))
 	})
 })
 
@@ -1114,6 +1119,91 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		_, redirErr := redirectIntro.Introspect("tok")
 		Expect(redirErr).To(HaveOccurred())
 		Expect(redirErr.Error()).To(ContainSubstring("insecure redirect in token introspection"))
+
+		// Redirect to different port on loopback is rejected
+		redirectPortServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://127.0.0.1:59999/target", http.StatusFound)
+		}))
+		defer redirectPortServer.Close()
+
+		portIntro := NewNimbusOpaqueTokenIntrospector(redirectPortServer.URL, "c", "s")
+		_, portErr := portIntro.Introspect("tok")
+		Expect(portErr).To(HaveOccurred())
+		Expect(portErr.Error()).To(ContainSubstring("redirect scheme, host, or port differs"))
+
+		// Redirect to different host is rejected even with HTTPS
+		redirectHostServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "https://remote-host.example.com/target", http.StatusFound)
+		}))
+		defer redirectHostServer.Close()
+
+		hostIntro := NewNimbusOpaqueTokenIntrospector(redirectHostServer.URL, "c", "s")
+		_, hostErr := hostIntro.Introspect("tok")
+		Expect(hostErr).To(HaveOccurred())
+		Expect(hostErr.Error()).To(ContainSubstring("redirect scheme, host, or port differs"))
+
+		// Same-origin redirect succeeds
+		sameOriginServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/target" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				Expect(json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "redirected-user"})).To(Succeed())
+				return
+			}
+			http.Redirect(w, r, "/target", http.StatusFound)
+		}))
+		defer sameOriginServer.Close()
+
+		sameOriginIntro := NewNimbusOpaqueTokenIntrospector(sameOriginServer.URL, "c", "s")
+		prin, sameErr := sameOriginIntro.Introspect("tok")
+		Expect(sameErr).NotTo(HaveOccurred())
+		Expect(prin.GetName()).To(Equal("redirected-user"))
+
+		// Custom redirect policy on httpClient is respected for same-origin redirects
+		customClient := &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return errors.New("custom redirect rejected")
+			},
+		}
+		customRedirectIntro := NewNimbusOpaqueTokenIntrospector(sameOriginServer.URL, "c", "s").WithHTTPClient(customClient)
+		_, customRedirErr := customRedirectIntro.Introspect("tok")
+		Expect(customRedirErr).To(HaveOccurred())
+		Expect(customRedirErr.Error()).To(ContainSubstring("custom redirect rejected"))
+
+		// Same-origin redirect loop (>= 10 redirects) stops after 10 redirects
+		loopServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, r.URL.Path, http.StatusFound)
+		}))
+		defer loopServer.Close()
+
+		loopIntro := NewNimbusOpaqueTokenIntrospector(loopServer.URL+"/loop", "c", "s")
+		_, loopErr := loopIntro.Introspect("tok")
+		Expect(loopErr).To(HaveOccurred())
+		Expect(loopErr.Error()).To(ContainSubstring("stopped after 10 redirects"))
+
+		// Test isSameOrigin and effectivePort helper directly
+		parseHelper := func(raw string) *url.URL {
+			u, err := url.Parse(raw)
+			Expect(err).NotTo(HaveOccurred())
+			return u
+		}
+		uHTTP80 := parseHelper("http://localhost:80/path")
+		uHTTPDefault := parseHelper("http://localhost/path")
+		uHTTPS443 := parseHelper("https://example.com:443/path")
+		uHTTPSDefault := parseHelper("https://example.com/path")
+		uDiffPort := parseHelper("http://localhost:8080/path")
+		uDiffScheme := parseHelper("https://localhost:80/path")
+		uDiffHost := parseHelper("http://127.0.0.1:80/path")
+
+		Expect(IsSameOriginForTest(uHTTP80, uHTTPDefault)).To(BeTrue())
+		Expect(IsSameOriginForTest(uHTTPS443, uHTTPSDefault)).To(BeTrue())
+		Expect(IsSameOriginForTest(uHTTP80, uDiffPort)).To(BeFalse())
+		Expect(IsSameOriginForTest(uHTTP80, uDiffScheme)).To(BeFalse())
+		Expect(IsSameOriginForTest(uHTTP80, uDiffHost)).To(BeFalse())
+		Expect(IsSameOriginForTest(nil, uHTTP80)).To(BeFalse())
+		Expect(IsSameOriginForTest(uHTTP80, nil)).To(BeFalse())
+		Expect(EffectivePortForTest(nil)).To(Equal(""))
+		Expect(EffectivePortForTest(&url.URL{Scheme: "ftp"})).To(Equal(""))
 	})
 
 	It("rejects zero and negative exp timestamps as expired with zero clock skew", func() {

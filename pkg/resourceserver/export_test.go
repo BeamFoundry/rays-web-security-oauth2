@@ -1,6 +1,8 @@
 package resourceserver
 
 import (
+	"net/url"
+
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
@@ -84,4 +86,12 @@ func NewBearerAuthenticationManagerForTest(
 		opaqueProvider: opaqueProvider,
 		fallback:       fallback,
 	}
+}
+
+func IsSameOriginForTest(target, configured *url.URL) bool {
+	return isSameOrigin(target, configured)
+}
+
+func EffectivePortForTest(u *url.URL) string {
+	return effectivePort(u)
 }

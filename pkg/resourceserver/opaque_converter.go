@@ -37,21 +37,13 @@ func (this *DefaultOpaqueTokenAuthenticationConverter) Convert(token string, pri
 
 	var issuedAt, expiresAt time.Time
 	if expVal, exists := attrs["exp"]; exists {
-		switch v := expVal.(type) {
-		case float64:
-			expiresAt = time.Unix(int64(v), 0)
-		case int64:
-			expiresAt = time.Unix(v, 0)
-		default:
+		if expSec, ok := parseIntegerTimestamp(expVal); ok {
+			expiresAt = time.Unix(expSec, 0)
 		}
 	}
 	if iatVal, exists := attrs["iat"]; exists {
-		switch v := iatVal.(type) {
-		case float64:
-			issuedAt = time.Unix(int64(v), 0)
-		case int64:
-			issuedAt = time.Unix(v, 0)
-		default:
+		if iatSec, ok := parseIntegerTimestamp(iatVal); ok {
+			issuedAt = time.Unix(iatSec, 0)
 		}
 	}
 

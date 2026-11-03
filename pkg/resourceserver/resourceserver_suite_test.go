@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -686,6 +687,25 @@ var _ = Describe("NimbusOpaqueTokenIntrospector", func() {
 		Expect(principal.GetAttributes()).To(HaveKeyWithValue("aud", "https://api.example.com"))
 	})
 
+	It("form-encodes client_id and client_secret in Basic authentication", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, pass, ok := r.BasicAuth()
+			Expect(ok).To(BeTrue())
+			Expect(user).To(Equal("client+id%3A1"))
+			Expect(pass).To(Equal("secret%2Fwith%2Bspecial%3Dchars"))
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "encoded-client-user"})).To(Succeed())
+		}))
+		defer server.Close()
+
+		introspector := NewNimbusOpaqueTokenIntrospector(server.URL, "client id:1", "secret/with+special=chars")
+		principal, err := introspector.Introspect("valid-tok")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(principal.GetName()).To(Equal("encoded-client-user"))
+	})
+
 	It("fails introspection when token is inactive", func() {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -1149,6 +1169,46 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		bAuthScopeInvalid, ok := authScopeInvalid.(*BearerTokenAuthentication)
 		Expect(ok).To(BeTrue())
 		Expect(bAuthScopeInvalid.GetToken().Scopes).To(ConsistOf("scp-from-fallback"))
+
+		// exp and iat as json.Number and string
+		attrsJsonNum := map[string]any{
+			"sub": "user-json-num",
+			"exp": json.Number("1700003600"),
+			"iat": "1700000000",
+		}
+		pJsonNum := NewDefaultOAuth2AuthenticatedPrincipal("user-json-num", attrsJsonNum, nil)
+		authJsonNum, err := conv.Convert("raw-json-num", pJsonNum)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthJsonNum, ok := authJsonNum.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthJsonNum.GetToken().IssuedAt.Unix()).To(Equal(int64(1700000000)))
+		Expect(bAuthJsonNum.GetToken().ExpiresAt.Unix()).To(Equal(int64(1700003600)))
+
+		// unparseable or fractional exp and iat preserve zero timestamps
+		attrsInvalidTimestamps := map[string]any{
+			"sub": "user-invalid-ts",
+			"exp": "not-a-timestamp",
+			"iat": 1700000000.5,
+		}
+		pInvalidTs := NewDefaultOAuth2AuthenticatedPrincipal("user-invalid-ts", attrsInvalidTimestamps, nil)
+		authInvalidTs, err := conv.Convert("raw-invalid-ts", pInvalidTs)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthInvalidTs, ok := authInvalidTs.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthInvalidTs.GetToken().IssuedAt.IsZero()).To(BeTrue())
+		Expect(bAuthInvalidTs.GetToken().ExpiresAt.IsZero()).To(BeTrue())
+
+		// out-of-range float exp preserves zero timestamp
+		attrsOorExp := map[string]any{
+			"sub": "user-oor-exp",
+			"exp": 1e25,
+		}
+		pOorExp := NewDefaultOAuth2AuthenticatedPrincipal("user-oor-exp", attrsOorExp, nil)
+		authOorExp, err := conv.Convert("raw-oor-exp", pOorExp)
+		Expect(err).NotTo(HaveOccurred())
+		bAuthOorExp, ok := authOorExp.(*BearerTokenAuthentication)
+		Expect(ok).To(BeTrue())
+		Expect(bAuthOorExp.GetToken().ExpiresAt.IsZero()).To(BeTrue())
 	})
 
 	It("validates HTTPS or loopback requirement on introspectionURI and prevents insecure redirects", func() {
@@ -1338,6 +1398,86 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		Expect(isOAuthExNbf).To(BeTrue())
 		Expect(oauthExNbf.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
 		Expect(oauthExNbf.OAuth2Error().ErrorDescription).To(Equal("invalid nbf claim"))
+
+		// Fractional exp is rejected with invalid exp claim
+		serverFractExp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "fract-exp-user",
+				"exp":    1700000000.5,
+			})).To(Succeed())
+		}))
+		defer serverFractExp.Close()
+
+		introFractExp := NewNimbusOpaqueTokenIntrospector(serverFractExp.URL, "c", "s").WithClockSkew(0)
+		_, errFractExp := introFractExp.Introspect("tok")
+		Expect(errFractExp).To(HaveOccurred())
+		oauthExFract, okFract := errFractExp.(*OAuth2AuthenticationException)
+		Expect(okFract).To(BeTrue())
+		Expect(oauthExFract.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthExFract.OAuth2Error().ErrorDescription).To(Equal("invalid exp claim"))
+
+		// Fractional nbf is rejected with invalid nbf claim
+		serverFractNbf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "fract-nbf-user",
+				"nbf":    1700000000.75,
+			})).To(Succeed())
+		}))
+		defer serverFractNbf.Close()
+
+		introFractNbf := NewNimbusOpaqueTokenIntrospector(serverFractNbf.URL, "c", "s").WithClockSkew(0)
+		_, errFractNbf := introFractNbf.Introspect("tok")
+		Expect(errFractNbf).To(HaveOccurred())
+		oauthExFractNbf, okFractNbf := errFractNbf.(*OAuth2AuthenticationException)
+		Expect(okFractNbf).To(BeTrue())
+		Expect(oauthExFractNbf.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthExFractNbf.OAuth2Error().ErrorDescription).To(Equal("invalid nbf claim"))
+
+		// Out-of-range exp is rejected with invalid exp claim
+		serverOorExp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "oor-exp-user",
+				"exp":    1e25,
+			})).To(Succeed())
+		}))
+		defer serverOorExp.Close()
+
+		introOorExp := NewNimbusOpaqueTokenIntrospector(serverOorExp.URL, "c", "s").WithClockSkew(0)
+		_, errOorExp := introOorExp.Introspect("tok")
+		Expect(errOorExp).To(HaveOccurred())
+		oauthExOor, okOor := errOorExp.(*OAuth2AuthenticationException)
+		Expect(okOor).To(BeTrue())
+		Expect(oauthExOor.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthExOor.OAuth2Error().ErrorDescription).To(Equal("invalid exp claim"))
+
+		// Out-of-range nbf is rejected with invalid nbf claim
+		serverOorNbf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"active": true,
+				"sub":    "oor-nbf-user",
+				"nbf":    1e25,
+			})).To(Succeed())
+		}))
+		defer serverOorNbf.Close()
+
+		introOorNbf := NewNimbusOpaqueTokenIntrospector(serverOorNbf.URL, "c", "s").WithClockSkew(0)
+		_, errOorNbf := introOorNbf.Introspect("tok")
+		Expect(errOorNbf).To(HaveOccurred())
+		oauthExOorNbf, okOorNbf := errOorNbf.(*OAuth2AuthenticationException)
+		Expect(okOorNbf).To(BeTrue())
+		Expect(oauthExOorNbf.OAuth2Error().ErrorCode).To(Equal(OAuth2ErrorInvalidToken))
+		Expect(oauthExOorNbf.OAuth2Error().ErrorDescription).To(Equal("invalid nbf claim"))
 	})
 
 	It("handles int64 and json.Number exp/nbf, empty authority prefix, and request errors", func() {
@@ -1582,6 +1722,91 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		sec := builder.Build()
 		ctx := context.WithValue(context.Background(), PrototypeContextParentInstance, sec)
 		Expect(filter.WithContext(ctx)).To(Succeed())
+	})
+
+	It("parses integer timestamps safely handling all accepted types and rejecting invalid or out-of-range values", func() {
+		// Valid integer float64
+		ts, ok := ParseIntegerTimestampForTest(float64(1700000000.0))
+		Expect(ok).To(BeTrue())
+		Expect(ts).To(Equal(int64(1700000000)))
+
+		tsZero, ok := ParseIntegerTimestampForTest(float64(0.0))
+		Expect(ok).To(BeTrue())
+		Expect(tsZero).To(Equal(int64(0)))
+
+		tsNeg, ok := ParseIntegerTimestampForTest(float64(-100.0))
+		Expect(ok).To(BeTrue())
+		Expect(tsNeg).To(Equal(int64(-100)))
+
+		// Fractional float64
+		_, ok = ParseIntegerTimestampForTest(1700000000.5)
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(-1700000000.5)
+		Expect(ok).To(BeFalse())
+
+		// NaN and Inf
+		_, ok = ParseIntegerTimestampForTest(math.NaN())
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(math.Inf(1))
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(math.Inf(-1))
+		Expect(ok).To(BeFalse())
+
+		// Out-of-range float64
+		_, ok = ParseIntegerTimestampForTest(1e25)
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(-1e25)
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(float64(math.MaxInt64))
+		Expect(ok).To(BeFalse())
+
+		// Exactly math.MinInt64 is representable
+		tsMin, ok := ParseIntegerTimestampForTest(float64(math.MinInt64))
+		Expect(ok).To(BeTrue())
+		Expect(tsMin).To(Equal(int64(math.MinInt64)))
+
+		// int64 and int
+		tsInt64, ok := ParseIntegerTimestampForTest(int64(123456789))
+		Expect(ok).To(BeTrue())
+		Expect(tsInt64).To(Equal(int64(123456789)))
+
+		tsInt, ok := ParseIntegerTimestampForTest(int(98765))
+		Expect(ok).To(BeTrue())
+		Expect(tsInt).To(Equal(int64(98765)))
+
+		// json.Number
+		tsJson, ok := ParseIntegerTimestampForTest(json.Number("1700000000"))
+		Expect(ok).To(BeTrue())
+		Expect(tsJson).To(Equal(int64(1700000000)))
+
+		_, ok = ParseIntegerTimestampForTest(json.Number("1700000000.5"))
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(json.Number("not-a-number"))
+		Expect(ok).To(BeFalse())
+
+		// string
+		tsStr, ok := ParseIntegerTimestampForTest("1700000000")
+		Expect(ok).To(BeTrue())
+		Expect(tsStr).To(Equal(int64(1700000000)))
+
+		_, ok = ParseIntegerTimestampForTest("1700000000.5")
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest("not-a-number")
+		Expect(ok).To(BeFalse())
+
+		// unsupported types
+		_, ok = ParseIntegerTimestampForTest(true)
+		Expect(ok).To(BeFalse())
+
+		_, ok = ParseIntegerTimestampForTest(nil)
+		Expect(ok).To(BeFalse())
 	})
 })
 

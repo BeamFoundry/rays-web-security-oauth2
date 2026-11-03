@@ -95,3 +95,7 @@ func IsSameOriginForTest(target, configured *url.URL) bool {
 func EffectivePortForTest(u *url.URL) string {
 	return effectivePort(u)
 }
+
+func ParseIntegerTimestampForTest(val any) (int64, bool) {
+	return parseIntegerTimestamp(val)
+}

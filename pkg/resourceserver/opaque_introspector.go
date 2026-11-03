@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -143,7 +144,7 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if this.clientID != "" || this.clientSecret != "" {
-		req.SetBasicAuth(this.clientID, this.clientSecret)
+		req.SetBasicAuth(url.QueryEscape(this.clientID), url.QueryEscape(this.clientSecret))
 	}
 
 	client := this.httpClient
@@ -389,6 +390,9 @@ func effectivePort(u *url.URL) string {
 func parseIntegerTimestamp(val any) (int64, bool) {
 	switch v := val.(type) {
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Trunc(v) != v || v < math.MinInt64 || v >= math.MaxInt64 {
+			return 0, false
+		}
 		return int64(v), true
 	case int64:
 		return v, true

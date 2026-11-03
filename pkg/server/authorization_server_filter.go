@@ -55,6 +55,9 @@ var (
 	_    SecurityFilter               = &OAuth2AuthorizationServerFilter{}
 	_    SecurityEndpointRegistration = &OAuth2AuthorizationServerFilter{}
 	_    BeamPostConstructWithContext = &OAuth2AuthorizationServerFilter{}
+
+	randRead    = rand.Read
+	jsonMarshal = json.Marshal
 )
 
 // New creates a new OAuth2AuthorizationServerFilter with the provided settings, repositories, services, and key source.
@@ -270,10 +273,10 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 
 	// Generate authorization code
 	codeBytes := make([]byte, 32)
-	Try(func() {
-		_, randErr := rand.Read(codeBytes)
-		RaiseNilErr(randErr)
-	}).LogError()
+	if _, randErr := randRead(codeBytes); randErr != nil {
+		NewErrorFrom(randErr).LogError()
+		return handler.Error(http.StatusInternalServerError, "Failed to generate authorization code")
+	}
 	code := base64.RawURLEncoding.EncodeToString(codeBytes)
 
 	now := time.Now()
@@ -289,10 +292,10 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 	}
 
 	authIDBytes := make([]byte, 16)
-	Try(func() {
-		_, randErr := rand.Read(authIDBytes)
-		RaiseNilErr(randErr)
-	}).LogError()
+	if _, randErr := randRead(authIDBytes); randErr != nil {
+		NewErrorFrom(randErr).LogError()
+		return handler.Error(http.StatusInternalServerError, "Failed to generate authorization ID")
+	}
 
 	authorization := &OAuth2Authorization{
 		ID:                 "auth-" + base64.RawURLEncoding.EncodeToString(authIDBytes),
@@ -456,10 +459,10 @@ func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handle
 	}
 
 	authIDBytes := make([]byte, 16)
-	Try(func() {
-		_, randErr := rand.Read(authIDBytes)
-		RaiseNilErr(randErr)
-	}).LogError()
+	if _, randErr := randRead(authIDBytes); randErr != nil {
+		NewErrorFrom(randErr).LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to generate authorization ID")
+	}
 
 	auth := &OAuth2Authorization{
 		ID:                 "auth-" + base64.RawURLEncoding.EncodeToString(authIDBytes),
@@ -664,11 +667,14 @@ func (this *OAuth2AuthorizationServerFilter) sendTokenSuccess(handler SecurityHa
 		resp["refresh_token"] = refresh.TokenValue
 	}
 
-	Try(func() {
-		bytes := RaiseVal(json.Marshal(resp))
-		_, writeErr := handler.Write(bytes)
-		RaiseNilErr(writeErr)
-	}).LogError()
+	bytes, marshalErr := jsonMarshal(resp)
+	if marshalErr != nil {
+		NewErrorFrom(marshalErr).LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to serialize token response")
+	}
+	if _, writeErr := handler.Write(bytes); writeErr != nil {
+		return writeErr
+	}
 	return nil
 }
 

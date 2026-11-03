@@ -23,6 +23,8 @@ import (
 // AlgRS256 is the RS256 algorithm name
 const AlgRS256 = "RS256"
 
+var rsaGenerateKey = rsa.GenerateKey
+
 // JWK represents a JSON Web Key (RFC 7517)
 type JWK struct {
 	Kty string `json:"kty"`
@@ -64,12 +66,10 @@ func (this RSAKeyManager) New(bits int, kid string) (*RSAKeyManager, Error) {
 	if bits < 2048 {
 		bits = 2048
 	}
-	var priv *rsa.PrivateKey
-	Try(func() {
-		var err error
-		priv, err = rsa.GenerateKey(rand.Reader, bits)
-		RaiseNilErr(err)
-	}).LogError()
+	priv, err := rsaGenerateKey(rand.Reader, bits)
+	if err != nil {
+		return nil, NewError("RSAKeyGenerationError", fmt.Sprintf("failed to generate rsa key: %s", err))
+	}
 	if kid == "" {
 		kid = fmt.Sprintf("k-%d", time.Now().Unix())
 	}
@@ -209,11 +209,11 @@ func (this *DefaultJwtEncoder) Encode(params *JwtEncoderParameters) (*Jwt, Error
 			return nil, NewError("InvalidPrivateKeyError", "private key is not *rsa.PrivateKey")
 		}
 		hashed := sha256.Sum256([]byte(signingInput))
-		Try(func() {
-			var rsaErr error
-			sig, rsaErr = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, hashed[:])
-			RaiseNilErr(rsaErr)
-		}).LogError()
+		var rsaErr error
+		sig, rsaErr = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, hashed[:])
+		if rsaErr != nil {
+			return nil, NewError("SignTokenError", fmt.Sprintf("failed to sign token: %s", rsaErr))
+		}
 	case "HS256":
 		secret, ok := privKey.([]byte)
 		if !ok {
@@ -444,7 +444,7 @@ func parseJwtTimestamp(val any) (int64, bool) {
 		if n, err := v.Int64(); err == nil {
 			return n, true
 		}
+	default:
 	}
 	return 0, false
 }
-

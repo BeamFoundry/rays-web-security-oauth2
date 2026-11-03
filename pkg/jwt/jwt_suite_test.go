@@ -11,7 +11,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -342,7 +345,6 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 				WithIssuer("https://remote.example.com").
 				WithAudience("remote-audience").
 				WithClockSkew(60 * time.Second)
-			concurrentDecoder.SetRefreshGroupForTest(nil)
 
 			var wg sync.WaitGroup
 			numGoroutines := 10
@@ -358,6 +360,16 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			}
 			wg.Wait()
 			Expect(concurrentFetches.Load()).To(BeNumerically("<=", 2))
+
+			// Remote decoder with refreshGroup = nil initializes refresh group on decode
+			nilGroupDecoder := NewJwxJwtDecoderWithRemoteJWKS(tsConcurrent.URL).
+				WithIssuer("https://remote.example.com").
+				WithAudience("remote-audience").
+				WithClockSkew(60 * time.Second)
+			nilGroupDecoder.SetRefreshGroupForTest(nil)
+			decodedNilGroup, errNilGroup := nilGroupDecoder.Decode(tok.TokenValue)
+			Expect(errNilGroup).NotTo(HaveOccurred())
+			Expect(decodedNilGroup.Subject()).To(Equal("remote-user"))
 
 			// Test audience mismatch
 			decoderWrongAud := NewJwxJwtDecoderWithKeySet(set).
@@ -771,14 +783,77 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			_, ok = ParseJwtTimestampForTest("not-a-number")
 			Expect(ok).To(BeFalse())
 		})
+
+		It("tests key generation error when rsa.GenerateKey fails", func() {
+			reset := SetRsaGenerateKeyForTest(func(io.Reader, int) (*rsa.PrivateKey, error) {
+				return nil, errors.New("simulated keygen failure")
+			})
+			defer reset()
+
+			_, err := NewRSAKeyManager(2048, "fail-key")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("RSAKeyGenerationError"))
+		})
+
+		It("tests DefaultJwtEncoder signing error when RSA key is too small", func() {
+			smallKey := &rsa.PrivateKey{PublicKey: rsa.PublicKey{N: big.NewInt(1), E: 65537}}
+			mockSource := &testMockJWKSource{secret: smallKey, alg: AlgRS256}
+			enc := NewDefaultJwtEncoder(mockSource)
+
+			claims := NewJwtClaimsSet()
+			claims.Subject = "sub-1"
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			_, err := enc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("SignTokenError"))
+		})
+
+		It("tests JwxJwtEncoder.Encode error when builder.Build fails on invalid claim", func() {
+			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test")
+			claims := NewJwtClaimsSet()
+			claims.Claims["sub"] = 12345 // non-string value for standard string claim "sub"
+			_, buildErr := jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(buildErr).To(HaveOccurred())
+			Expect(buildErr.Name()).To(Equal("JwtBuildError"))
+		})
+
+		It("tests JwxJwtDecoder.Decode error when ParseUnverified fails", func() {
+			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test")
+			claims := NewJwtClaimsSet()
+			claims.Subject = "sub-1"
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			tok, encErr := jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			pubJWK, err := jwk.Import(&rsaPriv.PublicKey)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pubJWK.Set(jwk.KeyIDKey, "k-test")).To(Succeed())
+			Expect(pubJWK.Set(jwk.AlgorithmKey, jwa.RS256())).To(Succeed())
+			keySet := jwk.NewSet()
+			Expect(keySet.AddKey(pubJWK)).To(Succeed())
+
+			reset := SetParseUnverifiedForTest(func(string) (map[string]any, map[string]any, Error) {
+				return nil, nil, NewError("ParseUnverifiedError", "unverified parse error")
+			})
+			defer reset()
+
+			dec := NewJwxJwtDecoderWithKeySet(keySet)
+			_, decErr := dec.Decode(tok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("ParseUnverifiedError"))
+		})
 	})
 })
 
 // testMockJWKSource is a test double for JWKSource that returns a configured secret and algorithm.
 type testMockJWKSource struct {
 	secret any
-	alg    string
 	err    Error
+	alg    string
 }
 
 // GetJWKSet returns an empty JWKSet for testing.

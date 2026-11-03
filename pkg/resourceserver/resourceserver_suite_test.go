@@ -1859,7 +1859,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		failingProv := &JwtAuthenticationProvider{}
 		mgr := NewBearerAuthenticationManagerForTest(failingProv, nil, nil)
 		res, err := mgr.Authenticate(NewBearerTokenAuthenticationToken("some.token"))
-		Expect(err).NotTo(BeNil())
+		Expect(err).To(HaveOccurred())
 		Expect(res).NotTo(BeNil())
 	})
 
@@ -1875,7 +1875,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 			},
 		}
 		auth, err := conv.Convert(tok)
-		Expect(err).To(BeNil())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(auth).NotTo(BeNil())
 		Expect(auth.GetAuthorities()).To(ConsistOf(Authority("SCOPE_read"), Authority("SCOPE_write"), Authority("ROLE_ADMIN")))
 	})
@@ -1893,7 +1893,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		prov := &JwtAuthenticationProvider{}
 		prov.SetInjectedDecoderForTest(mockDec)
 		auth, err := prov.Authenticate(NewBearerTokenAuthenticationToken("valid.jwt"))
-		Expect(err).To(BeNil())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(auth).NotTo(BeNil())
 		Expect(prov.GetDecoderForTest()).To(Equal(mockDec))
 
@@ -1903,7 +1903,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		customConv := DefaultJwtAuthenticationConverter{}.New()
 		prov2.SetInjectedConverterForTest(customConv)
 		auth2, err := prov2.Authenticate(NewBearerTokenAuthenticationToken("valid.jwt"))
-		Expect(err).To(BeNil())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(auth2).NotTo(BeNil())
 		Expect(prov2.GetConverterForTest()).To(Equal(customConv))
 
@@ -1912,7 +1912,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		prov3.SetInjectedDecoderForTest(mockDec)
 		prov3.SetInjectedConverterForTest(&mockFailingJwtConverter{})
 		_, err = prov3.Authenticate(NewBearerTokenAuthenticationToken("valid.jwt"))
-		Expect(err).NotTo(BeNil())
+		Expect(err).To(HaveOccurred())
 	})
 
 	It("handles OpaqueTokenAuthenticationProvider injected converter and converter error", func() {
@@ -1926,7 +1926,7 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		customConv := DefaultOpaqueTokenAuthenticationConverter{}.New()
 		prov.SetInjectedConverterForTest(customConv)
 		auth, err := prov.Authenticate(NewBearerTokenAuthenticationToken("opaque-token"))
-		Expect(err).To(BeNil())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(auth).NotTo(BeNil())
 		Expect(prov.GetConverterForTest()).To(Equal(customConv))
 
@@ -1935,21 +1935,39 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		prov2.SetInjectedIntrospectorForTest(mockIntro)
 		prov2.SetInjectedConverterForTest(&mockFailingOpaqueConverter{})
 		_, err = prov2.Authenticate(NewBearerTokenAuthenticationToken("opaque-token"))
-		Expect(err).NotTo(BeNil())
+		Expect(err).To(HaveOccurred())
 	})
 
 	It("introspects token when httpClient is nil (uses DefaultClient)", func() {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "testuser"})
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "testuser"})).To(Succeed())
 		}))
 		defer ts.Close()
 
 		intro := NewNimbusOpaqueTokenIntrospector(ts.URL, "client", "secret")
 		intro.ClearHttpClientForTest()
 		p, err := intro.Introspect("test-token")
-		Expect(err).To(BeNil())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(p.GetName()).To(Equal("testuser"))
+	})
+
+	It("returns wrapped error when response body read fails in Introspect", func() {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusOK)
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, hijackErr := hj.Hijack()
+				Expect(hijackErr).NotTo(HaveOccurred())
+				Expect(conn.Close()).To(Succeed())
+			}
+		}))
+		defer ts.Close()
+
+		intro := NewNimbusOpaqueTokenIntrospector(ts.URL, "client", "secret")
+		_, err := intro.Introspect("test-token")
+		Expect(err).To(HaveOccurred())
 	})
 })
 

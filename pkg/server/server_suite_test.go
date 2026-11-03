@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -527,6 +528,125 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			ok := errors.As(execErr, &defaultEx)
 			Expect(ok).To(BeTrue())
 			Expect(defaultEx.Status()).To(Equal(400))
+		})
+
+		It("returns 500 when randRead fails generating authorization code", func() {
+			authUser := DefaultOAuth2User{}.New(
+				[]GrantedAuthority{Authority("ROLE_USER")},
+				map[string]any{"sub": "john_doe"},
+				"sub",
+			)
+			contextHolder.GetContext().SetAuthentication(
+				OAuth2AuthenticationToken{}.New(authUser, authUser.GetAuthorities(), "internal"),
+			)
+
+			reset := SetRandReadForTest(func([]byte) (int, error) {
+				return 0, errors.New("simulated rand failure")
+			})
+			defer reset()
+
+			authURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/authorize" +
+				"?response_type=code" +
+				"&client_id=my-spa-app" +
+				"&redirect_uri=" + url.QueryEscape("https://my-spa.example.com/callback") +
+				"&code_challenge=challenge123" +
+				"&code_challenge_method=S256")
+			Expect(err).NotTo(HaveOccurred())
+
+			handler := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			execErr := router.Execute(handler)
+			Expect(execErr).To(HaveOccurred())
+			var defaultEx *DefaultSecurityFilterChainException
+			Expect(errors.As(execErr, &defaultEx)).To(BeTrue())
+			Expect(defaultEx.Status()).To(Equal(http.StatusInternalServerError))
+		})
+
+		It("returns 500 when randRead fails generating authorization ID in authorize", func() {
+			authUser := DefaultOAuth2User{}.New(
+				[]GrantedAuthority{Authority("ROLE_USER")},
+				map[string]any{"sub": "john_doe"},
+				"sub",
+			)
+			contextHolder.GetContext().SetAuthentication(
+				OAuth2AuthenticationToken{}.New(authUser, authUser.GetAuthorities(), "internal"),
+			)
+
+			calls := 0
+			reset := SetRandReadForTest(func(b []byte) (int, error) {
+				calls++
+				if calls == 1 {
+					return len(b), nil
+				}
+				return 0, errors.New("simulated auth id rand failure")
+			})
+			defer reset()
+
+			authURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/authorize" +
+				"?response_type=code" +
+				"&client_id=my-spa-app" +
+				"&redirect_uri=" + url.QueryEscape("https://my-spa.example.com/callback") +
+				"&code_challenge=challenge123" +
+				"&code_challenge_method=S256")
+			Expect(err).NotTo(HaveOccurred())
+
+			handler := NewMockSecurityHandler(HttpMethods.GET, authURI)
+			execErr := router.Execute(handler)
+			Expect(execErr).To(HaveOccurred())
+			var defaultEx *DefaultSecurityFilterChainException
+			Expect(errors.As(execErr, &defaultEx)).To(BeTrue())
+			Expect(defaultEx.Status()).To(Equal(http.StatusInternalServerError))
+		})
+
+		It("returns server error when randRead fails generating authorization ID in client_credentials", func() {
+			reset := SetRandReadForTest(func([]byte) (int, error) {
+				return 0, errors.New("simulated client creds rand failure")
+			})
+			defer reset()
+
+			tokenURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/token")
+			Expect(err).NotTo(HaveOccurred())
+			handler := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			handler.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("my-spa-app:client-secret-123")))
+			handler.SetFormValue("grant_type", "client_credentials")
+
+			execErr := router.Execute(handler)
+			Expect(execErr).To(HaveOccurred())
+			var defaultEx *DefaultSecurityFilterChainException
+			Expect(errors.As(execErr, &defaultEx)).To(BeTrue())
+			Expect(defaultEx.Status()).To(Equal(http.StatusBadRequest))
+		})
+
+		It("handles sendTokenSuccess serialization and write errors", func() {
+			tokenURI, err := url.Parse("https://auth.beamfoundry.com/oauth2/token")
+			Expect(err).NotTo(HaveOccurred())
+			access := &OAuth2AccessToken{
+				TokenValue: "at-val",
+				TokenType:  TokenTypeBearer,
+				ExpiresAt:  time.Now().Add(time.Hour),
+				Scopes:     []string{"read"},
+			}
+			refresh := &OAuth2RefreshToken{
+				TokenValue: "rt-val",
+				ExpiresAt:  time.Now().Add(24 * time.Hour),
+			}
+
+			// Marshal failure
+			resetMarshal := SetJsonMarshalForTest(func(any) ([]byte, error) {
+				return nil, errors.New("simulated json marshal failure")
+			})
+			h1 := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			err1 := filter.SendTokenSuccessForTest(h1, access, refresh)
+			resetMarshal()
+			Expect(err1).To(HaveOccurred())
+			var defaultEx *DefaultSecurityFilterChainException
+			Expect(errors.As(err1, &defaultEx)).To(BeTrue())
+			Expect(defaultEx.Status()).To(Equal(http.StatusBadRequest))
+
+			// Write failure
+			h2 := NewMockSecurityHandler(HttpMethods.POST, tokenURI)
+			failingH := &testMockFailingWriteSecurityHandler{SecurityHandler: h2}
+			err2 := filter.SendTokenSuccessForTest(failingH, access, refresh)
+			Expect(err2).To(MatchError(ContainSubstring("simulated write error")))
 		})
 	})
 
@@ -1324,6 +1444,7 @@ var _ = Describe("OAuth2AuthorizationServerFilter Endpoints", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(at).NotTo(BeNil())
 			Expect(rt).NotTo(BeNil())
+			Expect(rt.ExpiresAt).To(BeTemporally("~", time.Now().Add(30*24*time.Hour), 5*time.Second))
 		})
 
 		It("tests OAuth2AuthorizationServerFilter WithContext error cases and defaults", func() {
@@ -1845,7 +1966,7 @@ type testMockFailingSaveTokensAuthService struct {
 	OAuth2AuthorizationService
 }
 
-func (this *testMockFailingSaveTokensAuthService) SaveTokens(authID, expectedOldRefreshToken string, accessToken *OAuth2AccessToken, refreshToken *OAuth2RefreshToken) Error {
+func (this *testMockFailingSaveTokensAuthService) SaveTokens(_, _ string, _ *OAuth2AccessToken, _ *OAuth2RefreshToken) Error {
 	return NewError("StorageError", "database write failure")
 }
 
@@ -1870,4 +1991,13 @@ type testMockNilRefreshTokenGenerator struct {
 
 func (this *testMockNilRefreshTokenGenerator) Generate(_ *OAuth2Authorization, _ *RegisteredClient) (*OAuth2AccessToken, *OAuth2RefreshToken, Error) {
 	return this.accessToken, nil, nil
+}
+
+// testMockFailingWriteSecurityHandler fails on Write calls.
+type testMockFailingWriteSecurityHandler struct {
+	SecurityHandler
+}
+
+func (this *testMockFailingWriteSecurityHandler) Write(_ []byte) (int, error) {
+	return 0, errors.New("simulated write error")
 }

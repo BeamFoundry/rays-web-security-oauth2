@@ -1337,8 +1337,8 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 			hBadInit := NewMockSecurityHandler(HttpMethods.GET, uBadInit)
 			errExec := routerBadReg.Execute(hBadInit)
 			Expect(errExec).To(HaveOccurred())
-			exInit, ok := errExec.(*DefaultSecurityFilterChainException)
-			Expect(ok).To(BeTrue())
+			var exInit *DefaultSecurityFilterChainException
+			Expect(errors.As(errExec, &exInit)).To(BeTrue())
 			Expect(exInit.Status()).To(Equal(500))
 
 			// Test Authenticate when AuthenticationManager fails
@@ -1383,14 +1383,16 @@ var _ = Describe("OAuth2LoginAuthenticationFilter", func() {
 				"aud": "client-cb",
 				"exp": time.Now().Add(time.Hour).Unix(),
 			}
-			idTokKM, _ := RSAKeyManager{}.New(2048, "oidc-k1")
+			idTokKM, kmErr := RSAKeyManager{}.New(2048, "oidc-k1")
+			Expect(kmErr).NotTo(HaveOccurred())
 			idEnc := DefaultJwtEncoder{}.New(idTokKM)
-			idJwt, _ := idEnc.Encode(&JwtEncoderParameters{ClaimsSet: &JwtClaimsSet{
+			idJwt, encErr := idEnc.Encode(&JwtEncoderParameters{ClaimsSet: &JwtClaimsSet{
 				Subject:   "user-oidc-123",
 				Issuer:    "https://auth.example.com",
 				ExpiresAt: time.Now().Add(time.Hour),
 				Claims:    idClaimsOidc,
 			}})
+			Expect(encErr).NotTo(HaveOccurred())
 			idTokVal := idJwt.TokenValue
 
 			tokenServerOidc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

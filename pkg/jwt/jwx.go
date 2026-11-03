@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+var parseUnverified = ParseUnverified
+
 // JwxJwtDecoder implements JwtDecoder using github.com/lestrrat-go/jwx/v3
 // Supporting RS256-512, PS256-512, ES256-512, EdDSA, HS256-512, and remote JWKS
 type JwxJwtDecoder struct {
@@ -168,7 +170,10 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 		claimsMap[key] = val
 	}
 
-	headersMap, _, _ := ParseUnverified(tokenString)
+	headersMap, _, unverifiedErr := parseUnverified(tokenString)
+	if unverifiedErr != nil {
+		return nil, unverifiedErr
+	}
 
 	var issuedAt, expiresAt time.Time
 	if iat, ok := tok.IssuedAt(); ok {
@@ -233,12 +238,10 @@ func (this *JwxJwtEncoder) Encode(params *JwtEncoderParameters) (*Jwt, Error) {
 		}
 	}
 
-	var tok jwt.Token
-	Try(func() {
-		var err error
-		tok, err = builder.Build()
-		RaiseNilErr(err)
-	}).LogError()
+	tok, err := builder.Build()
+	if err != nil {
+		return nil, NewError("JwtBuildError", fmt.Sprintf("failed to build token: %s", err))
+	}
 
 	// Sign key setup
 	key, err := jwk.Import(this.signKey)

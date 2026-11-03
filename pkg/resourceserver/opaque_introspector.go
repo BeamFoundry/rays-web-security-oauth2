@@ -206,12 +206,10 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 		)
 	}
 
-	var bodyBytes []byte
-	Try(func() {
-		var readErr error
-		bodyBytes, readErr = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		RaiseNilErr(readErr)
-	}).LogError()
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return nil, NewErrorFrom(readErr)
+	}
 
 	var claims map[string]any
 	if unmarshalErr := json.Unmarshal(bodyBytes, &claims); unmarshalErr != nil {

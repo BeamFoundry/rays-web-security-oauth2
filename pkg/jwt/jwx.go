@@ -2,9 +2,12 @@ package jwt
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
+	"strings"
 	"time"
 
 	. "github.com/BeamFoundry/rays/pkg/lang"
@@ -171,8 +174,16 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 	}
 
 	headersMap, _, unverifiedErr := parseUnverified(tokenString)
-	if unverifiedErr != nil {
-		return nil, unverifiedErr
+	if unverifiedErr != nil || headersMap == nil {
+		headersMap = make(map[string]any)
+		parts := strings.Split(tokenString, ".")
+		if len(parts) == 3 {
+			if headerBytes, b64Err := base64.RawURLEncoding.DecodeString(parts[0]); b64Err == nil {
+				Try(func() {
+					RaiseNilErr(json.Unmarshal(headerBytes, &headersMap))
+				}).LogError()
+			}
+		}
 	}
 
 	var issuedAt, expiresAt time.Time

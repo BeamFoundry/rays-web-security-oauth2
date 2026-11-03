@@ -1957,6 +1957,11 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Content-Length", "100")
 			w.WriteHeader(http.StatusOK)
+			_, writeErr := w.Write([]byte(`{"active":true}`))
+			Expect(writeErr).NotTo(HaveOccurred())
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
 			if hj, ok := w.(http.Hijacker); ok {
 				conn, _, hijackErr := hj.Hijack()
 				Expect(hijackErr).NotTo(HaveOccurred())

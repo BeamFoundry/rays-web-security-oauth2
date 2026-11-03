@@ -819,7 +819,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(buildErr.Name()).To(Equal("JwtBuildError"))
 		})
 
-		It("tests JwxJwtDecoder.Decode error when ParseUnverified fails", func() {
+		It("tests JwxJwtDecoder.Decode fallback when ParseUnverified fails on non-JSON claims", func() {
 			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
 			Expect(err).NotTo(HaveOccurred())
 			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test")
@@ -842,9 +842,12 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			defer reset()
 
 			dec := NewJwxJwtDecoderWithKeySet(keySet)
-			_, decErr := dec.Decode(tok.TokenValue)
-			Expect(decErr).To(HaveOccurred())
-			Expect(decErr.Name()).To(Equal("ParseUnverifiedError"))
+			decoded, decErr := dec.Decode(tok.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decoded).NotTo(BeNil())
+			Expect(decoded.Headers).To(HaveKeyWithValue("kid", "k-test"))
+			Expect(decoded.Headers).To(HaveKeyWithValue("alg", "RS256"))
+			Expect(decoded.Subject()).To(Equal("sub-1"))
 		})
 	})
 })

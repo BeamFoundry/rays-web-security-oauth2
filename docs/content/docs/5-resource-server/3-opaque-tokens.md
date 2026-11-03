@@ -162,6 +162,7 @@ func (this *CustomOpaqueTokenConfig) HttpSecurity(
 			OpaqueTokenIntrospector(that.customIntrospector).
 			Realm("orders-api").
 		And().
+		Csrf().Disable().
 		SessionCreationPolicy().Stateless().
 		AuthorizedHTTPRequests().
 			Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").
@@ -189,6 +190,7 @@ func (this *CustomOpaqueTokenConfig) HttpSecurity() *HttpSecurity {
 			OpaqueTokenIntrospector(introspector).
 			Realm("orders-api").
 		And().
+		Csrf().Disable().
 		AuthorizedHTTPRequests().
 			Paths("/api/admin/**").HasRole("ADMIN").
 		And().

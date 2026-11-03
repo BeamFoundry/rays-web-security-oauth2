@@ -729,6 +729,7 @@ func (this *OpaqueTokenSecurityConfig) HttpSecurity() *HttpSecurity {
             ).
             Realm("orders-api").
         And().
+        Csrf().Disable().
         SessionCreationPolicy().Stateless().
         AuthorizedHTTPRequests().
             Paths("/api/orders/**").HasAuthority("SCOPE_orders:read").

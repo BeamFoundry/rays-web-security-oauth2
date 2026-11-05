@@ -7,6 +7,7 @@ import (
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -171,8 +172,16 @@ var _ = Describe("OAuth2AuthenticationException", func() {
 		Expect(authToken.GetCredentials()).To(BeEmpty())
 		Expect(authToken.GetName()).To(Equal("usr"))
 
-		// GetName with nil and non-OAuth2User principal
+		// GetName with non-OAuth2User Principal
+		simpleP := mockSimplePrincipal{name: "simple-p"}
+		pAuth := NewOAuth2AuthenticationToken(nil, nil, "reg-1")
+		pAuth.Principal = simpleP
+		Expect(pAuth.GetName()).To(Equal("simple-p"))
+
+		// GetName with nil and non-OAuth2User, non-Principal principal
 		emptyAuth := NewOAuth2AuthenticationToken(nil, nil, "reg-1")
+		Expect(emptyAuth.GetName()).To(Equal(""))
+		emptyAuth.Principal = 12345
 		Expect(emptyAuth.GetName()).To(Equal(""))
 
 		// User with non-string attribute or missing key
@@ -215,3 +224,11 @@ var _ = Describe("OAuth2AuthenticationException", func() {
 		Expect(p2.GetAuthorities()).To(BeEmpty())
 	})
 })
+
+type mockSimplePrincipal struct {
+	name string
+}
+
+func (this mockSimplePrincipal) GetName() string {
+	return this.name
+}

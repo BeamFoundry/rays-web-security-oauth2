@@ -21,6 +21,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/web"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1843,6 +1844,136 @@ var _ = Describe("BearerTokenAuthenticationFilter with Opaque Token", func() {
 		_, ok = ParseIntegerTimestampForTest(nil)
 		Expect(ok).To(BeFalse())
 	})
+
+	It("correctly checks loopback hosts", func() {
+		Expect(IsLoopbackHostForTest("localhost")).To(BeTrue())
+		Expect(IsLoopbackHostForTest("LOCALHOST")).To(BeTrue())
+		Expect(IsLoopbackHostForTest("127.0.0.1")).To(BeTrue())
+		Expect(IsLoopbackHostForTest("::1")).To(BeTrue())
+		Expect(IsLoopbackHostForTest("192.168.1.1")).To(BeFalse())
+		Expect(IsLoopbackHostForTest("example.com")).To(BeFalse())
+		Expect(IsLoopbackHostForTest("")).To(BeFalse())
+	})
+
+	It("delegates in bearerAuthenticationManager when only jwtProvider is configured and fails", func() {
+		failingProv := &JwtAuthenticationProvider{}
+		mgr := NewBearerAuthenticationManagerForTest(failingProv, nil, nil)
+		res, err := mgr.Authenticate(NewBearerTokenAuthenticationToken("some.token"))
+		Expect(err).To(HaveOccurred())
+		Expect(res).NotTo(BeNil())
+	})
+
+	It("ignores empty strings when converting JWT scopes and authorities", func() {
+		conv := DefaultJwtAuthenticationConverter{}.New()
+		tok := &Jwt{
+			TokenValue: "test.val",
+			Headers:    map[string]any{"alg": "none"},
+			Claims: map[string]any{
+				"sub":   "user1",
+				"scope": "  read   write  ",
+				"roles": []any{"", "ROLE_ADMIN"},
+			},
+		}
+		auth, err := conv.Convert(tok)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth).NotTo(BeNil())
+		Expect(auth.GetAuthorities()).To(ConsistOf(Authority("SCOPE_read"), Authority("SCOPE_write"), Authority("ROLE_ADMIN")))
+	})
+
+	It("handles JwtAuthenticationProvider injected decoder, converter, and converter error", func() {
+		// Mock decoder that returns a valid token
+		validTok := &Jwt{
+			TokenValue: "valid.jwt",
+			Headers:    map[string]any{"alg": "none"},
+			Claims:     map[string]any{"sub": "user1"},
+		}
+		mockDec := &mockStaticJwtDecoder{token: validTok}
+
+		// 1. Injected decoder
+		prov := &JwtAuthenticationProvider{}
+		prov.SetInjectedDecoderForTest(mockDec)
+		auth, err := prov.Authenticate(NewBearerTokenAuthenticationToken("valid.jwt"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth).NotTo(BeNil())
+		Expect(prov.GetDecoderForTest()).To(Equal(mockDec))
+
+		// 2. Injected converter
+		prov2 := &JwtAuthenticationProvider{}
+		prov2.SetInjectedDecoderForTest(mockDec)
+		customConv := DefaultJwtAuthenticationConverter{}.New()
+		prov2.SetInjectedConverterForTest(customConv)
+		auth2, err := prov2.Authenticate(NewBearerTokenAuthenticationToken("valid.jwt"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth2).NotTo(BeNil())
+		Expect(prov2.GetConverterForTest()).To(Equal(customConv))
+
+		// 3. Converter returns error
+		prov3 := &JwtAuthenticationProvider{}
+		prov3.SetInjectedDecoderForTest(mockDec)
+		prov3.SetInjectedConverterForTest(&mockFailingJwtConverter{})
+		_, err = prov3.Authenticate(NewBearerTokenAuthenticationToken("valid.jwt"))
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("handles OpaqueTokenAuthenticationProvider injected converter and converter error", func() {
+		mockIntro := &mockStaticIntrospector{
+			principal: NewDefaultOAuth2AuthenticatedPrincipal("user1", map[string]any{"sub": "user1"}, nil),
+		}
+
+		// Injected converter
+		prov := &OpaqueTokenAuthenticationProvider{}
+		prov.SetInjectedIntrospectorForTest(mockIntro)
+		customConv := DefaultOpaqueTokenAuthenticationConverter{}.New()
+		prov.SetInjectedConverterForTest(customConv)
+		auth, err := prov.Authenticate(NewBearerTokenAuthenticationToken("opaque-token"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(auth).NotTo(BeNil())
+		Expect(prov.GetConverterForTest()).To(Equal(customConv))
+
+		// Converter error
+		prov2 := &OpaqueTokenAuthenticationProvider{}
+		prov2.SetInjectedIntrospectorForTest(mockIntro)
+		prov2.SetInjectedConverterForTest(&mockFailingOpaqueConverter{})
+		_, err = prov2.Authenticate(NewBearerTokenAuthenticationToken("opaque-token"))
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("introspects token when httpClient is nil (uses DefaultClient)", func() {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			Expect(json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "testuser"})).To(Succeed())
+		}))
+		defer ts.Close()
+
+		intro := NewNimbusOpaqueTokenIntrospector(ts.URL, "client", "secret")
+		intro.ClearHttpClientForTest()
+		p, err := intro.Introspect("test-token")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(p.GetName()).To(Equal("testuser"))
+	})
+
+	It("returns wrapped error when response body read fails in Introspect", func() {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusOK)
+			_, writeErr := w.Write([]byte(`{"active":true}`))
+			Expect(writeErr).NotTo(HaveOccurred())
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, hijackErr := hj.Hijack()
+				Expect(hijackErr).NotTo(HaveOccurred())
+				Expect(conn.Close()).To(Succeed())
+			}
+		}))
+		defer ts.Close()
+
+		intro := NewNimbusOpaqueTokenIntrospector(ts.URL, "client", "secret")
+		_, err := intro.Introspect("test-token")
+		Expect(err).To(HaveOccurred())
+	})
 })
 
 // mockFailingJwtDecoder is a JwtDecoder test double that always returns an invalid signature error.
@@ -1851,4 +1982,36 @@ type mockFailingJwtDecoder struct{}
 // Decode returns a simulated JwtError.
 func (this *mockFailingJwtDecoder) Decode(_ string) (*Jwt, Error) {
 	return nil, NewError("JwtError", "invalid signature")
+}
+
+// mockStaticJwtDecoder returns a static Jwt for testing.
+type mockStaticJwtDecoder struct {
+	token *Jwt
+}
+
+func (this *mockStaticJwtDecoder) Decode(_ string) (*Jwt, Error) {
+	return this.token, nil
+}
+
+// mockFailingJwtConverter always returns an error.
+type mockFailingJwtConverter struct{}
+
+func (this *mockFailingJwtConverter) Convert(_ *Jwt) (*JwtAuthenticationToken, Error) {
+	return nil, NewError("ConversionError", "conversion failed")
+}
+
+// mockStaticIntrospector returns a static principal for testing.
+type mockStaticIntrospector struct {
+	principal OAuth2AuthenticatedPrincipal
+}
+
+func (this *mockStaticIntrospector) Introspect(_ string) (OAuth2AuthenticatedPrincipal, Error) {
+	return this.principal, nil
+}
+
+// mockFailingOpaqueConverter always returns an error.
+type mockFailingOpaqueConverter struct{}
+
+func (this *mockFailingOpaqueConverter) Convert(_ string, _ OAuth2AuthenticatedPrincipal) (Authentication, Error) {
+	return nil, NewError("ConversionError", "conversion failed")
 }

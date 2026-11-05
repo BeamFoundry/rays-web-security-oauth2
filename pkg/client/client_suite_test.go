@@ -12,6 +12,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/client"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -668,6 +669,58 @@ var _ = Describe("Authorized Client Providers & Manager", func() {
 				ClientRegistration: codeRegNoCC,
 			})
 			Expect(err).To(HaveOccurred())
+
+			// Manager FindByRegistrationID error when repo is configured but ID not found
+			emptyRepo := InMemoryClientRegistrationRepository{}.New()
+			mgrWithRepo := NewDefaultOAuth2AuthorizedClientManager(emptyRepo, nil)
+			_, err = mgrWithRepo.Authorize(&OAuth2AuthorizeRequest{ClientRegistrationID: "unknown-id"})
+			Expect(err).To(HaveOccurred())
+
+			// Manager provider error propagation
+			failingCCProvider := NewClientCredentialsAuthorizedClientProvider(&http.Client{Transport: &clientFailingRoundTripper{}})
+			mgrFailingProv := NewDefaultOAuth2AuthorizedClientManager(nil, nil, failingCCProvider)
+			_, err = mgrFailingProv.Authorize(&OAuth2AuthorizeRequest{ClientRegistration: regWithErrServer})
+			Expect(err).To(HaveOccurred())
+
+			// Invalid TokenURI for RefreshToken and ClientCredentials
+			badURIReg := ClientRegistrationBuilder{}.New("bad-uri-reg").
+				AuthorizationGrantType(GrantTypeClientCredentials).
+				TokenURI("://invalid-url\x7f").
+				Build()
+			_, err = rfProvider.Authorize(&OAuth2AuthorizeRequest{ClientRegistration: badURIReg, AuthorizedClient: existingClient})
+			Expect(err).To(HaveOccurred())
+			_, err = ccProvider.Authorize(&OAuth2AuthorizeRequest{ClientRegistration: badURIReg})
+			Expect(err).To(HaveOccurred())
+
+			// Error reading body and closing body for RefreshToken and ClientCredentials
+			errBodyClient := &http.Client{Transport: &clientErrBodyRoundTripper{}}
+			rfErrBody := NewRefreshTokenAuthorizedClientProvider(errBodyClient)
+			_, err = rfErrBody.Authorize(&OAuth2AuthorizeRequest{ClientRegistration: regWithErrServer, AuthorizedClient: existingClient})
+			Expect(err).To(HaveOccurred())
+
+			ccErrBody := NewClientCredentialsAuthorizedClientProvider(errBodyClient)
+			_, err = ccErrBody.Authorize(&OAuth2AuthorizeRequest{ClientRegistration: regWithErrServer})
+			Expect(err).To(HaveOccurred())
+
+			// ClientCredentials with scope returned in token response
+			scopeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "scoped-token",
+					"token_type":   "Bearer",
+					"scope":        "read write admin",
+					"expires_in":   3600,
+				})).To(Succeed())
+			}))
+			defer scopeServer.Close()
+			regScoped := ClientRegistrationBuilder{}.New("scoped-reg").
+				TokenURI(scopeServer.URL).
+				AuthorizationGrantType(GrantTypeClientCredentials).
+				Build()
+			ccProviderScoped := NewClientCredentialsAuthorizedClientProvider(scopeServer.Client())
+			scopedClient, err := ccProviderScoped.Authorize(&OAuth2AuthorizeRequest{ClientRegistration: regScoped})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(scopedClient.AccessToken.Scopes).To(ConsistOf("read", "write", "admin"))
 		})
 	})
 })
@@ -696,4 +749,24 @@ func (this *testFailingAuthorizedClientService) LoadAuthorizedClient(_, _ string
 // RemoveAuthorizedClient is a no-op that returns nil.
 func (this *testFailingAuthorizedClientService) RemoveAuthorizedClient(_, _ string) Error {
 	return nil
+}
+
+type clientErrReaderCloser struct{}
+
+func (this *clientErrReaderCloser) Read(_ []byte) (int, error) {
+	return 0, errors.New("read error")
+}
+
+func (this *clientErrReaderCloser) Close() error {
+	return errors.New("close error")
+}
+
+type clientErrBodyRoundTripper struct{}
+
+func (this *clientErrBodyRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       &clientErrReaderCloser{},
+		Header:     make(http.Header),
+	}, nil
 }

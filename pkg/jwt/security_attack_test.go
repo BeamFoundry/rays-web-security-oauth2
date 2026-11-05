@@ -11,6 +11,7 @@ import (
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	. "github.com/onsi/ginkgo/v2"

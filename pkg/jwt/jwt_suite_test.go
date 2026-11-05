@@ -11,9 +11,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +25,7 @@ import (
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays/pkg/lang"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	. "github.com/onsi/ginkgo/v2"
@@ -315,6 +320,16 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(decoded2.Subject()).To(Equal("remote-user"))
 			Expect(fetchCount.Load()).To(Equal(initialFetches))
 
+			// Remote decoder with cachedSet = nil uses cache.Lookup
+			decoderLookup := NewJwxJwtDecoderWithRemoteJWKS(ts.URL).
+				WithIssuer("https://remote.example.com").
+				WithAudience("remote-audience").
+				WithClockSkew(60 * time.Second)
+			decoderLookup.SetCachedSetForTest(nil)
+			decodedLookup, err := decoderLookup.Decode(tok.TokenValue)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(decodedLookup.Subject()).To(Equal("remote-user"))
+
 			// Concurrent decodes coalesce initial fetches
 			var concurrentFetches atomic.Int64
 			tsConcurrent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -345,6 +360,16 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			}
 			wg.Wait()
 			Expect(concurrentFetches.Load()).To(BeNumerically("<=", 2))
+
+			// Remote decoder with refreshGroup = nil initializes refresh group on decode
+			nilGroupDecoder := NewJwxJwtDecoderWithRemoteJWKS(tsConcurrent.URL).
+				WithIssuer("https://remote.example.com").
+				WithAudience("remote-audience").
+				WithClockSkew(60 * time.Second)
+			nilGroupDecoder.SetRefreshGroupForTest(nil)
+			decodedNilGroup, errNilGroup := nilGroupDecoder.Decode(tok.TokenValue)
+			Expect(errNilGroup).NotTo(HaveOccurred())
+			Expect(decodedNilGroup.Subject()).To(Equal("remote-user"))
 
 			// Test audience mismatch
 			decoderWrongAud := NewJwxJwtDecoderWithKeySet(set).
@@ -600,14 +625,257 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(decErr).To(HaveOccurred())
 
 			// Invalid signature base64
-			_, decErr = NewNimbusJwtDecoder(kmDefault).Decode(rawHeader + "." + rawClaims + ".invalid!base64!chars")
+			validParts := strings.Split(fullTok.TokenValue, ".")
+			_, decErr = NewNimbusJwtDecoder(kmDefault).Decode(validParts[0] + "." + validParts[1] + ".!@#$%")
 			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("InvalidSignatureError"))
 
 			// RS256 with invalid public key type
 			//nolint:gosec // mock test key
 			invalidPubSource := &testMockJWKSource{secret: "not-rsa-public-key", alg: AlgRS256}
 			_, decErr = NewNimbusJwtDecoder(invalidPubSource).Decode(fullTok.TokenValue)
 			Expect(decErr).To(HaveOccurred())
+
+			// JWKSource GetSigningKey error
+			errSource := &testMockJWKSource{err: NewError("KeyError", "key not available")}
+			_, encErr = NewDefaultJwtEncoder(errSource).Encode(&JwtEncoderParameters{ClaimsSet: fullClaims})
+			Expect(encErr).To(HaveOccurred())
+
+			// Headers != nil in DefaultJwtEncoder
+			tokWithCustomHeaders, encErr := NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{
+				Headers:   map[string]any{"custom-header": "test-val"},
+				ClaimsSet: fullClaims,
+			})
+			Expect(encErr).NotTo(HaveOccurred())
+			Expect(tokWithCustomHeaders.Headers["custom-header"]).To(Equal("test-val"))
+
+			// JSON marshal error for headers and claims
+			_, encErr = NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{
+				Headers:   map[string]any{"unmarshalable": make(chan int)},
+				ClaimsSet: fullClaims,
+			})
+			Expect(encErr).To(HaveOccurred())
+
+			_, encErr = NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{
+				ClaimsSet: &JwtClaimsSet{
+					Claims: map[string]any{"unmarshalable": make(chan int)},
+				},
+			})
+			Expect(encErr).To(HaveOccurred())
+
+			// HS256 valid encode and decode
+			hsSource := &testMockJWKSource{secret: []byte("01234567890123456789012345678901"), alg: "HS256"}
+			hsEncoder := NewDefaultJwtEncoder(hsSource)
+			hsTok, encErr := hsEncoder.Encode(&JwtEncoderParameters{ClaimsSet: fullClaims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			hsDecoder := NewNimbusJwtDecoder(hsSource)
+			decodedHS, decErr := hsDecoder.Decode(hsTok.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decodedHS.Claims["sub"]).To(Equal("sub-123"))
+
+			// HS256 signature mismatch
+			tamperedHSTok := hsTok.TokenValue[:len(hsTok.TokenValue)-5] + "AAAAA"
+			_, decErr = hsDecoder.Decode(tamperedHSTok)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("SignatureVerificationError"))
+
+			// Audience as single string in claims
+			claimsWithSingleAud := NewJwtClaimsSet()
+			claimsWithSingleAud.Subject = "aud-user"
+			claimsWithSingleAud.ExpiresAt = time.Now().Add(time.Hour)
+			claimsWithSingleAud.Claims["aud"] = "single-aud-client"
+			tokSingleAud, encErr := NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{ClaimsSet: claimsWithSingleAud})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			decAud := NewNimbusJwtDecoder(kmDefault).WithAudience("single-aud-client")
+			decodedAud, decErr := decAud.Decode(tokSingleAud.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decodedAud).NotTo(BeNil())
+
+			// Audience with non-string type in claims
+			claimsWithBadAud := NewJwtClaimsSet()
+			claimsWithBadAud.Subject = "bad-aud-user"
+			claimsWithBadAud.ExpiresAt = time.Now().Add(time.Hour)
+			claimsWithBadAud.Claims["aud"] = 12345
+			tokBadAud, encErr := NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{ClaimsSet: claimsWithBadAud})
+			Expect(encErr).NotTo(HaveOccurred())
+			_, decErr = decAud.Decode(tokBadAud.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+
+			// nbf with non-numeric claim
+			claimsWithBadNbf := NewJwtClaimsSet()
+			claimsWithBadNbf.Subject = "bad-nbf-user"
+			claimsWithBadNbf.ExpiresAt = time.Now().Add(time.Hour)
+			claimsWithBadNbf.Claims["nbf"] = "non-numeric-nbf"
+			tokBadNbf, encErr := NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{ClaimsSet: claimsWithBadNbf})
+			Expect(encErr).NotTo(HaveOccurred())
+			decodedBadNbf, decErr := NewNimbusJwtDecoder(kmDefault).Decode(tokBadNbf.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decodedBadNbf).NotTo(BeNil())
+
+			// JwxJwtEncoder error cases: invalid signKey type
+			badKeyEncoder := NewJwxJwtEncoder(12345, jwa.RS256(), "bad-key")
+			_, encErr = badKeyEncoder.Encode(&JwtEncoderParameters{ClaimsSet: fullClaims})
+			Expect(encErr).To(HaveOccurred())
+			Expect(encErr.Name()).To(Equal("JWKImportError"))
+
+			// JwxJwtEncoder error cases: algorithm mismatch with key type
+			rsaPrivDefault, rsaErr := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(rsaErr).NotTo(HaveOccurred())
+			mismatchEncoder := NewJwxJwtEncoder(rsaPrivDefault, jwa.HS256(), "mismatch")
+			_, encErr = mismatchEncoder.Encode(&JwtEncoderParameters{ClaimsSet: fullClaims})
+			Expect(encErr).To(HaveOccurred())
+			Expect(encErr.Name()).To(Equal("JwtSignError"))
+
+			// JwxJwtDecoder error cases: initErr != nil via invalid URL
+			badInitDecoder := NewJwxJwtDecoderWithRemoteJWKS("://invalid-url\x7f")
+			_, decErr = badInitDecoder.Decode(fullTok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("JWKSFetchError"))
+
+			// JwxJwtDecoder error cases: unreachable remote JWKS
+			badRemoteDecoder := NewJwxJwtDecoderWithRemoteJWKS("http://127.0.0.1:1/certs.json")
+			_, decErr = badRemoteDecoder.Decode(fullTok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+
+			// JwxJwtDecoder error cases: malformed token
+			_, decErr = NewJwxJwtDecoderWithKeySet(nil).Decode("invalid.jwt.token")
+			Expect(decErr).To(HaveOccurred())
+
+			// JwxJwtDecoder error cases: expired token validation
+			expiredClaims := NewJwtClaimsSet()
+			expiredClaims.Subject = "expired-user"
+			expiredClaims.ExpiresAt = time.Now().Add(-1 * time.Hour)
+			jwxEnc := NewJwxJwtEncoder(rsaPrivDefault, jwa.RS256(), "k1")
+			expTok, encErr = jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: expiredClaims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			rsaPubDefault := &rsaPrivDefault.PublicKey
+			pubJWK, importErr := jwk.Import(rsaPubDefault)
+			Expect(importErr).NotTo(HaveOccurred())
+			Expect(pubJWK.Set(jwk.KeyIDKey, "k1")).To(Succeed())
+			Expect(pubJWK.Set(jwk.AlgorithmKey, jwa.RS256())).To(Succeed())
+			keySet := jwk.NewSet()
+			Expect(keySet.AddKey(pubJWK)).To(Succeed())
+
+			jwxValidatingDecoder := NewJwxJwtDecoderWithKeySet(keySet).WithClockSkew(0)
+			_, decErr = jwxValidatingDecoder.Decode(expTok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("JwtValidationError"))
+
+			// Test ParseJwtTimestampForTest with various types
+			tVal, ok := ParseJwtTimestampForTest(float64(12345))
+			Expect(ok).To(BeTrue())
+			Expect(tVal).To(Equal(int64(12345)))
+
+			tVal, ok = ParseJwtTimestampForTest(int64(67890))
+			Expect(ok).To(BeTrue())
+			Expect(tVal).To(Equal(int64(67890)))
+
+			tVal, ok = ParseJwtTimestampForTest(json.Number("13579"))
+			Expect(ok).To(BeTrue())
+			Expect(tVal).To(Equal(int64(13579)))
+
+			_, ok = ParseJwtTimestampForTest(json.Number("invalid-num"))
+			Expect(ok).To(BeFalse())
+
+			_, ok = ParseJwtTimestampForTest("not-a-number")
+			Expect(ok).To(BeFalse())
+		})
+
+		It("tests key generation error when rsa.GenerateKey fails", func() {
+			reset := SetRsaGenerateKeyForTest(func(io.Reader, int) (*rsa.PrivateKey, error) {
+				return nil, errors.New("simulated keygen failure")
+			})
+			defer reset()
+
+			_, err := NewRSAKeyManager(2048, "fail-key")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("RSAKeyGenerationError"))
+		})
+
+		It("tests DefaultJwtEncoder signing error when RSA key is too small", func() {
+			smallKey := &rsa.PrivateKey{N: big.NewInt(1), E: 65537}
+			mockSource := &testMockJWKSource{secret: smallKey, alg: AlgRS256}
+			enc := NewDefaultJwtEncoder(mockSource)
+
+			claims := NewJwtClaimsSet()
+			claims.Subject = "sub-1"
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			_, err := enc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("SignTokenError"))
+		})
+
+		It("tests JwxJwtEncoder.Encode error when builder.Build fails on invalid claim", func() {
+			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test")
+			claims := NewJwtClaimsSet()
+			claims.Claims["sub"] = 12345 // non-string value for standard string claim "sub"
+			_, buildErr := jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(buildErr).To(HaveOccurred())
+			Expect(buildErr.Name()).To(Equal("JwtBuildError"))
+		})
+
+		It("tests JwxJwtDecoder.Decode fallback when ParseUnverified fails on non-JSON claims", func() {
+			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test")
+			claims := NewJwtClaimsSet()
+			claims.Subject = "sub-1"
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			tok, encErr := jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			pubJWK, err := jwk.Import(&rsaPriv.PublicKey)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pubJWK.Set(jwk.KeyIDKey, "k-test")).To(Succeed())
+			Expect(pubJWK.Set(jwk.AlgorithmKey, jwa.RS256())).To(Succeed())
+			keySet := jwk.NewSet()
+			Expect(keySet.AddKey(pubJWK)).To(Succeed())
+
+			reset := SetParseUnverifiedForTest(func(string) (map[string]any, map[string]any, Error) {
+				return nil, nil, NewError("ParseUnverifiedError", "unverified parse error")
+			})
+			defer reset()
+
+			dec := NewJwxJwtDecoderWithKeySet(keySet)
+			decoded, decErr := dec.Decode(tok.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decoded).NotTo(BeNil())
+			Expect(decoded.Headers).To(HaveKeyWithValue("kid", "k-test"))
+			Expect(decoded.Headers).To(HaveKeyWithValue("alg", "RS256"))
+			Expect(decoded.Subject()).To(Equal("sub-1"))
+		})
+
+		It("tests JwxJwtDecoder.Decode handles surrounding whitespace and yields header and KeyID", func() {
+			rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(err).NotTo(HaveOccurred())
+			jwxEnc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "k-test-whitespace")
+			claims := NewJwtClaimsSet()
+			claims.Subject = "sub-ws"
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			tok, encErr := jwxEnc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			pubJWK, err := jwk.Import(&rsaPriv.PublicKey)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pubJWK.Set(jwk.KeyIDKey, "k-test-whitespace")).To(Succeed())
+			Expect(pubJWK.Set(jwk.AlgorithmKey, jwa.RS256())).To(Succeed())
+			keySet := jwk.NewSet()
+			Expect(keySet.AddKey(pubJWK)).To(Succeed())
+
+			dec := NewJwxJwtDecoderWithKeySet(keySet)
+			tokenWithWhitespace := " \t\n " + tok.TokenValue + " \n\r "
+			decoded, decErr := dec.Decode(tokenWithWhitespace)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decoded).NotTo(BeNil())
+			Expect(decoded.KeyID()).To(Equal("k-test-whitespace"))
+			Expect(decoded.Headers).To(HaveKeyWithValue("kid", "k-test-whitespace"))
+			Expect(decoded.Headers).To(HaveKeyWithValue("alg", "RS256"))
+			Expect(decoded.Subject()).To(Equal("sub-ws"))
 		})
 	})
 })
@@ -615,6 +883,7 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 // testMockJWKSource is a test double for JWKSource that returns a configured secret and algorithm.
 type testMockJWKSource struct {
 	secret any
+	err    Error
 	alg    string
 }
 
@@ -627,10 +896,16 @@ func (this *testMockJWKSource) GetJWKSet() (*JWKSet, Error) {
 //
 //nolint:revive // JWKSource interface requires 4 return values
 func (this *testMockJWKSource) GetSigningKey() (kid string, privateKey any, alg string, err Error) {
+	if this.err != nil {
+		return "", nil, "", this.err
+	}
 	return "hmac-1", this.secret, this.alg, nil
 }
 
 // GetVerificationKey returns the configured test verification key and algorithm.
 func (this *testMockJWKSource) GetVerificationKey(_ string) (publicKey any, alg string, err Error) {
+	if this.err != nil {
+		return nil, "", this.err
+	}
 	return this.secret, this.alg, nil
 }

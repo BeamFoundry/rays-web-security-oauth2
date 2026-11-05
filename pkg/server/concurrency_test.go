@@ -12,6 +12,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/server"
 	. "github.com/BeamFoundry/rays-web-security/pkg/testing"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/BeamFoundry/rays/pkg/web"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

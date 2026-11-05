@@ -55,6 +55,9 @@ var (
 	_    SecurityFilter               = &OAuth2AuthorizationServerFilter{}
 	_    SecurityEndpointRegistration = &OAuth2AuthorizationServerFilter{}
 	_    BeamPostConstructWithContext = &OAuth2AuthorizationServerFilter{}
+
+	randRead    = rand.Read
+	jsonMarshal = json.Marshal
 )
 
 // New creates a new OAuth2AuthorizationServerFilter with the provided settings, repositories, services, and key source.
@@ -270,9 +273,9 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 
 	// Generate authorization code
 	codeBytes := make([]byte, 32)
-	if _, randErr := rand.Read(codeBytes); randErr != nil {
+	if _, randErr := randRead(codeBytes); randErr != nil {
 		NewErrorFrom(randErr).LogError()
-		return handler.Error(http.StatusInternalServerError, "Failed to generate code")
+		return handler.Error(http.StatusInternalServerError, "Failed to generate authorization code")
 	}
 	code := base64.RawURLEncoding.EncodeToString(codeBytes)
 
@@ -289,9 +292,9 @@ func (this *OAuth2AuthorizationServerFilter) handleAuthorize(handler SecurityHan
 	}
 
 	authIDBytes := make([]byte, 16)
-	if _, randErr := rand.Read(authIDBytes); randErr != nil {
+	if _, randErr := randRead(authIDBytes); randErr != nil {
 		NewErrorFrom(randErr).LogError()
-		return handler.Error(http.StatusInternalServerError, "Failed to generate authorization id")
+		return handler.Error(http.StatusInternalServerError, "Failed to generate authorization ID")
 	}
 
 	authorization := &OAuth2Authorization{
@@ -456,8 +459,9 @@ func (this *OAuth2AuthorizationServerFilter) handleClientCredentialsGrant(handle
 	}
 
 	authIDBytes := make([]byte, 16)
-	if _, randErr := rand.Read(authIDBytes); randErr != nil {
-		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to generate authorization id")
+	if _, randErr := randRead(authIDBytes); randErr != nil {
+		NewErrorFrom(randErr).LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to generate authorization ID")
 	}
 
 	auth := &OAuth2Authorization{
@@ -528,14 +532,11 @@ func (this *OAuth2AuthorizationServerFilter) handleJWKS(handler SecurityHandler)
 		return handler.Error(http.StatusInternalServerError, "Failed to retrieve JWK set")
 	}
 	handler.SetHeader("Content-Type", "application/json")
-	bytes, jsonErr := json.Marshal(jwkSet)
-	if jsonErr != nil {
-		NewErrorFrom(jsonErr).LogError()
-		return handler.Error(http.StatusInternalServerError, "Failed to serialize JWK set")
-	}
-	if _, writeErr := handler.Write(bytes); writeErr != nil {
-		NewErrorFrom(writeErr).LogError()
-	}
+	Try(func() {
+		bytes := RaiseVal(json.Marshal(jwkSet))
+		_, writeErr := handler.Write(bytes)
+		RaiseNilErr(writeErr)
+	}).LogError()
 	return nil
 }
 
@@ -556,14 +557,11 @@ func (this *OAuth2AuthorizationServerFilter) handleDiscovery(handler SecurityHan
 	}
 
 	handler.SetHeader("Content-Type", "application/json")
-	bytes, jsonErr := json.Marshal(meta)
-	if jsonErr != nil {
-		NewErrorFrom(jsonErr).LogError()
-		return handler.Error(http.StatusInternalServerError, "Failed to serialize discovery metadata")
-	}
-	if _, writeErr := handler.Write(bytes); writeErr != nil {
-		NewErrorFrom(writeErr).LogError()
-	}
+	Try(func() {
+		bytes := RaiseVal(json.Marshal(meta))
+		_, writeErr := handler.Write(bytes)
+		RaiseNilErr(writeErr)
+	}).LogError()
 	return nil
 }
 
@@ -597,14 +595,11 @@ func (this *OAuth2AuthorizationServerFilter) handleIntrospect(handler SecurityHa
 	}
 
 	handler.SetHeader("Content-Type", "application/json")
-	bytes, jsonErr := json.Marshal(resp)
-	if jsonErr != nil {
-		NewErrorFrom(jsonErr).LogError()
-		return handler.Error(http.StatusInternalServerError, "Failed to serialize introspection response")
-	}
-	if _, writeErr := handler.Write(bytes); writeErr != nil {
-		NewErrorFrom(writeErr).LogError()
-	}
+	Try(func() {
+		bytes := RaiseVal(json.Marshal(resp))
+		_, writeErr := handler.Write(bytes)
+		RaiseNilErr(writeErr)
+	}).LogError()
 	return nil
 }
 
@@ -647,9 +642,10 @@ func (this *OAuth2AuthorizationServerFilter) handleRevoke(handler SecurityHandle
 		}
 	}
 	handler.SetHeader("Content-Type", "application/json")
-	if _, writeErr := handler.Write([]byte("{}")); writeErr != nil {
-		NewErrorFrom(writeErr).LogError()
-	}
+	Try(func() {
+		_, writeErr := handler.Write([]byte("{}"))
+		RaiseNilErr(writeErr)
+	}).LogError()
 	return nil
 }
 
@@ -671,17 +667,13 @@ func (this *OAuth2AuthorizationServerFilter) sendTokenSuccess(handler SecurityHa
 		resp["refresh_token"] = refresh.TokenValue
 	}
 
-	bytes, jsonErr := json.Marshal(resp)
-	if jsonErr != nil {
-		err := NewErrorFrom(jsonErr)
-		err.LogError()
-		return err
+	bytes, marshalErr := jsonMarshal(resp)
+	if marshalErr != nil {
+		NewErrorFrom(marshalErr).LogError()
+		return this.sendTokenError(handler, OAuth2ErrorServerError, "Failed to serialize token response")
 	}
-	_, writeErr := handler.Write(bytes)
-	if writeErr != nil {
-		err := NewErrorFrom(writeErr)
-		err.LogError()
-		return err
+	if _, writeErr := handler.Write(bytes); writeErr != nil {
+		return writeErr
 	}
 	return nil
 }
@@ -693,12 +685,10 @@ func (this *OAuth2AuthorizationServerFilter) sendTokenError(handler SecurityHand
 		"error":             errCode,
 		"error_description": errDesc,
 	}
-	bytes, jsonErr := json.Marshal(resp)
-	if jsonErr != nil {
-		NewErrorFrom(jsonErr).LogError()
-	}
-	if _, writeErr := handler.Write(bytes); writeErr != nil {
-		NewErrorFrom(writeErr).LogError()
-	}
+	Try(func() {
+		bytes := RaiseVal(json.Marshal(resp))
+		_, writeErr := handler.Write(bytes)
+		RaiseNilErr(writeErr)
+	}).LogError()
 	return handler.Error(http.StatusBadRequest, errDesc)
 }

@@ -49,9 +49,9 @@ func (this InMemoryRegisteredClientRepository) New(clients ...*RegisteredClient)
 	this.byClientID = make(map[string]*RegisteredClient)
 	repo := &this
 	for _, c := range clients {
-		if err := repo.Save(c); err != nil {
-			err.LogError()
-		}
+		Try(func() {
+			RaiseNilErr(repo.Save(c))
+		}).LogError()
 	}
 	return repo
 }

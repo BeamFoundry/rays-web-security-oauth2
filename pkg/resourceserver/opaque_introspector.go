@@ -133,10 +133,12 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	if valErr := validateIntrospectionURI(this.introspectionURI); valErr != nil {
 		return nil, valErr
 	}
-	configuredURL, parseErr := url.Parse(this.introspectionURI)
-	if parseErr != nil {
-		return nil, NewErrorFrom(parseErr)
-	}
+	var configuredURL *url.URL
+	Try(func() {
+		var parseErr error
+		configuredURL, parseErr = url.Parse(this.introspectionURI)
+		RaiseNilErr(parseErr)
+	}).LogError()
 
 	timeout := this.timeout
 	if timeout <= 0 {
@@ -149,10 +151,12 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 	form.Set("token", token)
 	form.Set("token_type_hint", "access_token")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, this.introspectionURI, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, NewErrorFrom(err)
-	}
+	var req *http.Request
+	Try(func() {
+		var reqErr error
+		req, reqErr = http.NewRequestWithContext(ctx, http.MethodPost, this.introspectionURI, strings.NewReader(form.Encode()))
+		RaiseNilErr(reqErr)
+	}).LogError()
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if this.clientID != "" || this.clientSecret != "" {
@@ -187,9 +191,9 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 		return nil, NewErrorFrom(doErr)
 	}
 	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			NewErrorFrom(closeErr).LogError()
-		}
+		Try(func() {
+			RaiseNilErr(resp.Body.Close())
+		}).LogError()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
@@ -280,10 +284,6 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 
 	authorities := make([]GrantedAuthority, 0)
 	addAuth := func(sourceClaim, s string) {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return
-		}
 		if sourceClaim == claimScope || sourceClaim == claimScp {
 			if this.authorityPrefix == "" {
 				authorities = append(authorities, Authority(s))
@@ -312,12 +312,6 @@ func (this *NimbusOpaqueTokenIntrospector) Introspect(token string) (OAuth2Authe
 						for part := range strings.FieldsSeq(s) {
 							addAuth(claimKey, part)
 						}
-					}
-				}
-			case []string:
-				for _, s := range v {
-					for part := range strings.FieldsSeq(s) {
-						addAuth(claimKey, part)
 					}
 				}
 			default:

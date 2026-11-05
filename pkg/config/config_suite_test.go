@@ -15,6 +15,7 @@ import (
 	. "github.com/BeamFoundry/rays-web-security/pkg/config"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/core"
+	_ "github.com/BeamFoundry/rays/pkg/testing"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -297,7 +298,9 @@ var _ = Describe("OAuth2 Configurers DSL", func() {
 			loginConf := NewOAuth2LoginConfigurer(builder).
 				AuthorizationRequestRepository(SessionAuthorizationRequestRepository{}.New()).
 				LoginProcessingURL("/login/oauth2/code/*").
-				AuthorizationBaseURI("/oauth2/authorization")
+				AuthorizationBaseURI("/oauth2/authorization").
+				BaseURL("https://example.com").
+				TrustedProxy(true)
 			Expect(loginConf.And()).To(Equal(builder))
 
 			// Resource server configurer

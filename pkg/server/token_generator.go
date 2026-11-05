@@ -3,7 +3,6 @@ package server
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -55,9 +54,10 @@ func (this *JwtOAuth2TokenGenerator) Generate(authorization *OAuth2Authorization
 	claimsSet.IssuedAt = now
 	claimsSet.ExpiresAt = accessExpiresAt
 	jtiBytes := make([]byte, 16)
-	if _, randErr := rand.Read(jtiBytes); randErr != nil {
-		return nil, nil, NewError("CryptoError", fmt.Sprintf("failed to generate jwt id: %s", randErr))
-	}
+	Try(func() {
+		_, randErr := rand.Read(jtiBytes)
+		RaiseNilErr(randErr)
+	}).LogError()
 	claimsSet.JWTID = "jti-" + base64.RawURLEncoding.EncodeToString(jtiBytes)
 	if len(authorization.AuthorizedScopes) > 0 {
 		claimsSet.Claims["scope"] = strings.Join(authorization.AuthorizedScopes, " ")
@@ -90,9 +90,10 @@ func (this *JwtOAuth2TokenGenerator) Generate(authorization *OAuth2Authorization
 		refreshExpiresAt := now.Add(refreshTTL)
 
 		refBytes := make([]byte, 32)
-		if _, randErr := rand.Read(refBytes); randErr != nil {
-			return nil, nil, NewError("CryptoError", fmt.Sprintf("failed to generate refresh token: %s", randErr))
-		}
+		Try(func() {
+			_, randErr := rand.Read(refBytes)
+			RaiseNilErr(randErr)
+		}).LogError()
 		refVal := base64.RawURLEncoding.EncodeToString(refBytes)
 
 		refreshToken = OAuth2RefreshToken{}.New(refVal, now, refreshExpiresAt)

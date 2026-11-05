@@ -1,6 +1,7 @@
 package server
 
 import (
+	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/core"
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 	. "github.com/BeamFoundry/rays-web-security/pkg/core"
 	. "github.com/BeamFoundry/rays/pkg/lang"
@@ -55,4 +56,37 @@ func (this *OAuth2AuthorizationServerFilter) GetDepsForTest() *ServerFilterDeps 
 		AuthService:    this.authorizationService,
 		Settings:       this.settings,
 	}
+}
+
+// UntrackForTest removes the tracked ID from InMemoryOAuth2AuthorizationService for unit testing fallback removal branches.
+func (this *InMemoryOAuth2AuthorizationService) UntrackForTest(id string) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	delete(this.tracked, id)
+}
+
+// SetAuthCodeForTest sets an authorization directly into byAuthCode for unit testing edge cases.
+func (this *InMemoryOAuth2AuthorizationService) SetAuthCodeForTest(code string, auth *OAuth2Authorization) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.byAuthCode[code] = auth
+}
+
+// SendTokenSuccessForTest exposes sendTokenSuccess for unit tests.
+func (this *OAuth2AuthorizationServerFilter) SendTokenSuccessForTest(handler SecurityHandler, access *OAuth2AccessToken, refresh *OAuth2RefreshToken) error {
+	return this.sendTokenSuccess(handler, access, refresh)
+}
+
+// SetRandReadForTest sets the randRead function for testing.
+func SetRandReadForTest(fn func([]byte) (int, error)) func() {
+	orig := randRead
+	randRead = fn
+	return func() { randRead = orig }
+}
+
+// SetJsonMarshalForTest sets the jsonMarshal function for testing.
+func SetJsonMarshalForTest(fn func(any) ([]byte, error)) func() {
+	orig := jsonMarshal
+	jsonMarshal = fn
+	return func() { jsonMarshal = orig }
 }

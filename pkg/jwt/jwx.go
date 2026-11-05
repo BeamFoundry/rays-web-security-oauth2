@@ -2,9 +2,12 @@ package jwt
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
+	"strings"
 	"time"
 
 	. "github.com/BeamFoundry/rays/pkg/lang"
@@ -14,6 +17,8 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwt"
 	"golang.org/x/sync/singleflight"
 )
+
+var parseUnverified = ParseUnverified
 
 // JwxJwtDecoder implements JwtDecoder using github.com/lestrrat-go/jwx/v3
 // Supporting RS256-512, PS256-512, ES256-512, EdDSA, HS256-512, and remote JWKS
@@ -45,21 +50,23 @@ func (this JwxJwtDecoder) NewWithRemoteJWKS(jwksURI string) *JwxJwtDecoder {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	rcClient := httprc.NewClient(httprc.WithHTTPClient(httpClient))
 	ctx := context.Background()
-	cache, err := jwk.NewCache(ctx, rcClient)
-	if err != nil {
-		this.initErr = err
-		return &this
-	}
+	var cache *jwk.Cache
+	Try(func() {
+		var err error
+		cache, err = jwk.NewCache(ctx, rcClient)
+		RaiseNilErr(err)
+	}).LogError()
 	this.cache = cache
 	if regErr := cache.Register(ctx, jwksURI, jwk.WithWaitReady(false), jwk.WithHttprcResourceOption(httprc.WithHTTPClient(httpClient))); regErr != nil {
 		this.initErr = regErr
 		return &this
 	}
-	cs, csErr := cache.CachedSet(jwksURI)
-	if csErr != nil {
-		this.initErr = csErr
-		return &this
-	}
+	var cs jwk.CachedSet
+	Try(func() {
+		var csErr error
+		cs, csErr = cache.CachedSet(jwksURI)
+		RaiseNilErr(csErr)
+	}).LogError()
 	this.cachedSet = cs
 	return &this
 }
@@ -112,12 +119,6 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 				this.refreshGroup = &singleflight.Group{}
 			}
 			_, refErr, _ := this.refreshGroup.Do(this.jwksURI, func() (any, error) {
-				checkCtx, checkCancel := context.WithTimeout(ctx, 100*time.Millisecond)
-				ready := this.cache.Ready(checkCtx, this.jwksURI)
-				checkCancel()
-				if ready {
-					return struct{}{}, nil
-				}
 				refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
 				defer refCancel()
 				return this.cache.Refresh(refCtx, this.jwksURI)
@@ -126,17 +127,17 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 				return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", refErr))
 			}
 		}
-		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		set, err := this.cache.Lookup(lookupCtx, this.jwksURI)
-		if err != nil {
-			return nil, NewError("JWKSFetchError", fmt.Sprintf("failed to fetch remote jwks: %s", err))
+		var keySet jwk.Set = this.cachedSet
+		if keySet == nil {
+			lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			Try(func() {
+				var err error
+				keySet, err = this.cache.Lookup(lookupCtx, this.jwksURI)
+				RaiseNilErr(err)
+			}).LogError()
 		}
-		if this.cachedSet != nil {
-			parseOptions = append(parseOptions, jwt.WithKeySet(this.cachedSet))
-		} else {
-			parseOptions = append(parseOptions, jwt.WithKeySet(set))
-		}
+		parseOptions = append(parseOptions, jwt.WithKeySet(keySet))
 	} else if this.keySet != nil {
 		parseOptions = append(parseOptions, jwt.WithKeySet(this.keySet))
 	}
@@ -166,16 +167,24 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 	claimsMap := make(map[string]any)
 	for _, key := range tok.Keys() {
 		var val any
-		if getErr := tok.Get(key, &val); getErr == nil {
-			claimsMap[key] = val
-		} else {
-			NewErrorFrom(getErr).LogError()
-		}
+		Try(func() {
+			RaiseNilErr(tok.Get(key, &val))
+		}).LogError()
+		claimsMap[key] = val
 	}
 
-	headersMap, _, unverifiedErr := ParseUnverified(tokenString)
+	headersMap, _, unverifiedErr := parseUnverified(tokenString)
 	if unverifiedErr != nil || headersMap == nil {
 		headersMap = make(map[string]any)
+		normalizedToken := strings.TrimSpace(tokenString)
+		parts := strings.Split(normalizedToken, ".")
+		if len(parts) == 3 {
+			if headerBytes, b64Err := base64.RawURLEncoding.DecodeString(parts[0]); b64Err == nil {
+				Try(func() {
+					RaiseNilErr(json.Unmarshal(headerBytes, &headersMap))
+				}).LogError()
+			}
+		}
 	}
 
 	var issuedAt, expiresAt time.Time
@@ -252,13 +261,13 @@ func (this *JwxJwtEncoder) Encode(params *JwtEncoderParameters) (*Jwt, Error) {
 		return nil, NewError("JWKImportError", fmt.Sprintf("failed to import jwk from raw key: %s", err))
 	}
 	if this.keyID != "" {
-		if setErr := key.Set(jwk.KeyIDKey, this.keyID); setErr != nil {
-			NewErrorFrom(setErr).LogError()
-		}
+		Try(func() {
+			RaiseNilErr(key.Set(jwk.KeyIDKey, this.keyID))
+		}).LogError()
 	}
-	if setErr := key.Set(jwk.AlgorithmKey, this.algorithm); setErr != nil {
-		NewErrorFrom(setErr).LogError()
-	}
+	Try(func() {
+		RaiseNilErr(key.Set(jwk.AlgorithmKey, this.algorithm))
+	}).LogError()
 
 	signedBytes, err := jwt.Sign(tok, jwt.WithKey(this.algorithm, key))
 	if err != nil {

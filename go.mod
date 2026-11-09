@@ -7,7 +7,7 @@ require (
 	github.com/BeamFoundry/rays-web-security v0.2.0
 	github.com/lestrrat-go/httprc/v3 v3.0.6
 	github.com/lestrrat-go/jwx/v3 v3.3.0
-	github.com/onsi/ginkgo/v2 v2.33.1
+	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.44.0
 	github.com/stillya/testcontainers-keycloak v0.3.8
 	github.com/testcontainers/testcontainers-go v0.43.0

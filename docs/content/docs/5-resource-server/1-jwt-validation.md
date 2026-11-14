@@ -40,20 +40,20 @@ type Jwt struct {
 | **Key Input** | Remote `jwks_uri` (`NewWithRemoteJWKS`) or `jwx/v3` `jwk.Set` (`NewWithKeySet`) | `JWKSource` interface (e.g., `RSAKeyManager`, custom PEM/KMS source) |
 | **Remote JWKS & Rotation** | Built-in (`jwk.Cache` + `httprc/v3` + `singleflight`) | Not built-in (delegates key lookup to `JWKSource`) |
 | **Standard Algorithms** | `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512` | `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512` (Go stdlib only) |
-| **Non-Stdlib Curves/Algs** | `ES256K` (secp256k1), `Ed448` via `jwx/v3` | Unsupported (`UnsupportedAlgorithmError`) |
+| **Non-Stdlib Curves/Algs** | Opt-in only: `ES256K` (`secp256k1`, requires `-tags jwx_es256k`) and `Ed448` (requires registering an extension such as `import _ "github.com/lestrrat-go/jwx-circl-ed448"`); neither is enabled by default | Unsupported (`UnsupportedAlgorithmError`) |
 | **Audience Validation** | Variadic `WithAudience(aud ...string)` (OR-match) | Variadic `WithAudience(aud ...string)` (OR-match) |
 | **Runtime Lifecycle** | Spawns background JWKS refresh goroutines for remote JWKS | Stateless & synchronous per `Decode` call (zero external deps) |
 | **Error Granularity** | `JWKSFetchError`, `JwtParseError`, `JwtValidationError` | Granular (`AlgorithmMismatchError`, `UnknownKeyIdError`, `SignatureVerificationError`, `JwtExpiredError`, `JwtNotYetValidError`, `InvalidIssuerError`, `InvalidAudienceError`) |
 
 **Rule of thumb:**
-*   Use **`JwxJwtDecoder`** when verifying tokens against an external Identity Provider's remote JWKS endpoint (`jwks_uri`) with automatic key rotation, when verifying from a `jwx` `jwk.Set`, or when you need non-stdlib algorithms like `ES256K` / `Ed448`.
+*   Use **`JwxJwtDecoder`** when verifying tokens against an external Identity Provider's remote JWKS endpoint (`jwks_uri`) with automatic key rotation, when verifying from a `jwx` `jwk.Set`, or when enabling opt-in non-stdlib algorithms (`ES256K` via `-tags jwx_es256k`, or `Ed448` via an extension module such as `github.com/lestrrat-go/jwx-circl-ed448`). Selecting `JwxJwtDecoder` alone does not enable `ES256K` or `Ed448`.
 *   Use **`NimbusJwtDecoder`** when verifying tokens against an in-process `JWKSource` (such as `RSAKeyManager`, shared HMAC secrets, or a custom PEM/KMS-backed `JWKSource`), when you want zero background goroutines and zero third-party crypto dependencies, or when you want granular error names in unit/integration tests.
 
 ---
 
 ## 🔑 `JwxJwtDecoder` (Powered by `lestrrat-go/jwx/v3`)
 
-For external Identity Providers and remote JWKS endpoints, `JwxJwtDecoder` integrates with **`github.com/lestrrat-go/jwx/v3`** and supports all standard JWS algorithms (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512`, plus `ES256K` / `Ed448`).
+For external Identity Providers and remote JWKS endpoints, `JwxJwtDecoder` integrates with **`github.com/lestrrat-go/jwx/v3`** and supports all standard JWS algorithms out of the box (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512`), plus opt-in `ES256K` (with `-tags jwx_es256k`) and `Ed448` (with a registered extension such as `github.com/lestrrat-go/jwx-circl-ed448`).
 
 ### 1. Remote JWKS Endpoint (with Key Rotation)
 
@@ -183,8 +183,8 @@ func (this *DecoderConfig) JwtDecoder(
 
 Both `JwxJwtDecoder` and `NimbusJwtDecoder` enforce:
 
-1. **Cryptographic Signature:** Verifies the token's signature (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, or `HS256-512`) against the key matching `kid`, rejecting `alg: "none"` and mismatched key types or EC curves.
-2. **Expiration (`exp`):** Requires a valid positive numeric `exp` claim and rejects tokens past expiration plus clock skew (60s default).
-3. **Not Before (`nbf`):** When present, requires a valid positive numeric `nbf` claim and rejects tokens not yet active within clock skew.
+1. **Cryptographic Signature:** Verifies the token's signature (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, or `HS256-512`) against the key matching `kid`, rejecting `alg: "none"` and mismatched key types. `NimbusJwtDecoder` additionally enforces strict RFC 7518 ECDSA algorithm-to-curve pairing (`ES256` with `P-256`, `ES384` with `P-384`, `ES512` with `P-521`).
+2. **Expiration (`exp`):** Requires an `exp` claim and rejects tokens past expiration plus clock skew (60s default); `NimbusJwtDecoder` additionally requires `exp` to be a positive numeric JSON value.
+3. **Not Before (`nbf`):** When present, rejects tokens whose activation time is in the future within allowable clock skew; `NimbusJwtDecoder` additionally enforces a positive numeric JSON `nbf` value, whereas `JwxJwtDecoder` delegates `nbf` parsing and validation to `jwx/v3`.
 4. **Issuer (`iss`):** When `WithIssuer` is configured, ensures `iss` matches the expected issuer URL.
 5. **Audience (`aud`):** When `WithAudience` is configured, ensures at least one configured audience matches the token's `aud` claim.

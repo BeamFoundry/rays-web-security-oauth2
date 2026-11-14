@@ -31,20 +31,33 @@ type Jwt struct {
 
 ---
 
-## 🔑 `JwxJwtDecoder` (Powered by `lestrrat-go/jwx`)
+## ⚖️ Choosing a `JwtDecoder`: `JwxJwtDecoder` vs `NimbusJwtDecoder`
 
-For production environments, `rays-web-security-oauth2` integrates with **`github.com/lestrrat-go/jwx/v3`** (the Go equivalent of Java's Nimbus JOSE+JWT used by Spring Security).
+`rays-web-security-oauth2` provides two `JwtDecoder` implementations with complementary strengths:
 
-This provides full RFC 7515/7517/7518/7519 compliance and supports **all** signature algorithms:
-*   **RSA:** `RS256`, `RS384`, `RS512`
-*   **RSA-PSS:** `PS256`, `PS384`, `PS512`
-*   **ECDSA:** `ES256`, `ES384`, `ES512` (P-256, P-384, P-521)
-*   **EdDSA:** `Ed25519`
-*   **HMAC:** `HS256`, `HS384`, `HS512`
+| Feature / Use Case | `JwxJwtDecoder` | `NimbusJwtDecoder` |
+| :--- | :--- | :--- |
+| **Key Input** | Remote `jwks_uri` (`NewWithRemoteJWKS`) or `jwx/v3` `jwk.Set` (`NewWithKeySet`) | `JWKSource` interface (e.g., `RSAKeyManager`, custom PEM/KMS source) |
+| **Remote JWKS & Rotation** | Built-in (`jwk.Cache` + `httprc/v3` + `singleflight`) | Not built-in (delegates key lookup to `JWKSource`) |
+| **Standard Algorithms** | `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512` | `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512` (Go stdlib only) |
+| **Non-Stdlib Curves/Algs** | `ES256K` (secp256k1), `Ed448` via `jwx/v3` | Unsupported (`UnsupportedAlgorithmError`) |
+| **Audience Validation** | Variadic `WithAudience(aud ...string)` (OR-match) | Variadic `WithAudience(aud ...string)` (OR-match) |
+| **Runtime Lifecycle** | Spawns background JWKS refresh goroutines for remote JWKS | Stateless & synchronous per `Decode` call (zero external deps) |
+| **Error Granularity** | `JWKSFetchError`, `JwtParseError`, `JwtValidationError` | Granular (`AlgorithmMismatchError`, `UnknownKeyIdError`, `SignatureVerificationError`, `JwtExpiredError`, `JwtNotYetValidError`, `InvalidIssuerError`, `InvalidAudienceError`) |
+
+**Rule of thumb:**
+*   Use **`JwxJwtDecoder`** when verifying tokens against an external Identity Provider's remote JWKS endpoint (`jwks_uri`) with automatic key rotation, when verifying from a `jwx` `jwk.Set`, or when you need non-stdlib algorithms like `ES256K` / `Ed448`.
+*   Use **`NimbusJwtDecoder`** when verifying tokens against an in-process `JWKSource` (such as `RSAKeyManager`, shared HMAC secrets, or a custom PEM/KMS-backed `JWKSource`), when you want zero background goroutines and zero third-party crypto dependencies, or when you want granular error names in unit/integration tests.
+
+---
+
+## 🔑 `JwxJwtDecoder` (Powered by `lestrrat-go/jwx/v3`)
+
+For external Identity Providers and remote JWKS endpoints, `JwxJwtDecoder` integrates with **`github.com/lestrrat-go/jwx/v3`** and supports all standard JWS algorithms (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512`, plus `ES256K` / `Ed448`).
 
 ### 1. Remote JWKS Endpoint (with Key Rotation)
 
-When connecting to an external Identity Provider (Keycloak, Auth0, Okta, Google), the decoder automatically fetches and verifies public keys directly from the provider's `jwks_uri`:
+When connecting to an external Identity Provider (Keycloak, Auth0, Okta, Google), the decoder automatically fetches, caches, and rotates public keys from the provider's `jwks_uri`:
 
 ```go
 package configurations
@@ -62,11 +75,11 @@ type DecoderConfig struct {
     Configuration
 }
 
-// Automatically fetches and verifies keys from remote JWKS
+// Automatically fetches and verifies keys from remote JWKS.
 func (this *DecoderConfig) JwtDecoder() JwtDecoder {
-    return JwxJwtDecoder{}.NewWithRemoteJWKS("https://auth.company.com/oauth2/jwks").
+    return NewJwxJwtDecoderWithRemoteJWKS("https://auth.company.com/oauth2/jwks").
         WithIssuer("https://auth.company.com").
-        WithAudience("my-api-audience").
+        WithAudience("my-api-audience", "my-api-v2").
         WithClockSkew(60 * time.Second)
 }
 
@@ -81,22 +94,97 @@ func (this *DecoderConfig) JwtAuthenticationProvider(
 }
 ```
 
-### 2. Static JWK Set or Key Pair
+### 2. Static JWK Set
 
-For internal services or testing, you can initialize the decoder with a local `jwk.Set`:
+For internal services or testing with a preloaded `jwk.Set`:
 
 ```go
 func (this *DecoderConfig) LocalJwtDecoder(set jwk.Set) JwtDecoder {
-    return JwxJwtDecoder{}.NewWithKeySet(set).
+    return NewJwxJwtDecoderWithKeySet(set).
         WithIssuer("https://auth.local").
         WithAudience("internal-api")
 }
 ```
 
+---
+
+## 🛡️ `NimbusJwtDecoder` (`JWKSource` & Go Stdlib)
+
+`NimbusJwtDecoder` verifies tokens directly against a [`JWKSource`](../6-authorization-server/3-token-issuance/) using only the Go standard library (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, and `HS256-512`):
+
+```go
+func (this *DecoderConfig) NimbusDecoder(
+    that struct {
+        jwkSource JWKSource `@:"Inject"`
+    },
+) JwtDecoder {
+    return NewNimbusJwtDecoder(that.jwkSource).
+        WithIssuer("https://auth.company.com").
+        WithAudience("my-api-audience", "my-api-v2").
+        WithClockSkew(60 * time.Second)
+}
+```
+
+---
+
+## ⚙️ Externalizing Decoder Settings with `ConfigurationProperties`
+
+Instead of hardcoding endpoints, issuers, or allowed audiences, bind them from your application configuration (`application.yaml`) using Rays' [`ConfigurationProperties`](https://rays.bfdy.dev/):
+
+```yaml
+security:
+  oauth2:
+    resourceserver:
+      jwksURI: "https://auth.company.com/.well-known/jwks.json"
+      issuer: "https://auth.company.com"
+      audiences: ["my-api-audience", "my-api-v2"]
+      clockSkew: "60s"
+```
+
+```go
+package configurations
+
+import (
+    "time"
+
+    . "github.com/BeamFoundry/rays/pkg/core"
+    . "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
+)
+
+type ResourceServerJwtProperties struct {
+    ConfigurationProperties `Name:"security.oauth2.resourceserver"`
+
+    jwksURI   string        `validate:"required,url"`
+    issuer    string        `validate:"required,url"`
+    audiences []string      `validate:"gt=0,dive,required"`
+    clockSkew time.Duration `validate:"gte=0"`
+}
+
+var _, _ = any(&ResourceServerJwtProperties{}).(Stereotype)
+
+func (this *DecoderConfig) JwtDecoder(
+    that struct {
+        props *ResourceServerJwtProperties `@:"Inject"`
+    },
+) JwtDecoder {
+    return NewJwxJwtDecoderWithRemoteJWKS(that.props.jwksURI).
+        WithIssuer(that.props.issuer).
+        WithAudience(that.props.audiences...).
+        WithClockSkew(that.props.clockSkew)
+}
+```
+
+> [!NOTE]
+> Rays `ConfigurationProperties` binds **private (lowercase)** struct fields by exact case match and validates them using `go-playground/validator/v10` tags. Inject the properties struct into a `Configuration` or `Service` in the same package.
+
+---
+
 ### Validations Performed
 
-1. **Cryptographic Signature:** Verifies RSA (RS256) or HMAC (HS256) using public keys matching the token's `kid` header.
-2. **Expiration (`exp`):** Rejects tokens whose expiration timestamp plus clock skew is in the past.
-3. **Not Before (`nbf`):** Rejects tokens that are not yet valid.
-4. **Issuer (`iss`):** Ensures the issuing authority matches the expected URL.
-5. **Audience (`aud`):** Ensures the token was intended for this specific resource server.
+Both `JwxJwtDecoder` and `NimbusJwtDecoder` enforce:
+
+1. **Cryptographic Signature:** Verifies the token's signature (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, or `HS256-512`) against the key matching `kid`, rejecting `alg: "none"` and mismatched key types or EC curves.
+2. **Expiration (`exp`):** Requires a valid positive numeric `exp` claim and rejects tokens past expiration plus clock skew (60s default).
+3. **Not Before (`nbf`):** When present, requires a valid positive numeric `nbf` claim and rejects tokens not yet active within clock skew.
+4. **Issuer (`iss`):** When `WithIssuer` is configured, ensures `iss` matches the expected issuer URL.
+5. **Audience (`aud`):** When `WithAudience` is configured, ensures at least one configured audience matches the token's `aud` claim.

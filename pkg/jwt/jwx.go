@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ type JwxJwtDecoder struct {
 	refreshGroup *singleflight.Group
 	initErr      error
 	issuer       string
-	audience     string
+	audience     []string
 	clockSkew    time.Duration
 }
 
@@ -87,9 +88,9 @@ func (this *JwxJwtDecoder) WithIssuer(issuer string) *JwxJwtDecoder {
 	return this
 }
 
-// WithAudience configures the expected "aud" (audience) claim for token validation.
-func (this *JwxJwtDecoder) WithAudience(aud string) *JwxJwtDecoder {
-	this.audience = aud
+// WithAudience configures one or more expected "aud" (audience) values for token validation.
+func (this *JwxJwtDecoder) WithAudience(aud ...string) *JwxJwtDecoder {
+	this.audience = append(this.audience, aud...)
 	return this
 }
 
@@ -155,8 +156,17 @@ func (this *JwxJwtDecoder) Decode(tokenString string) (*Jwt, Error) {
 	if this.issuer != "" {
 		validateOptions = append(validateOptions, jwt.WithIssuer(this.issuer))
 	}
-	if this.audience != "" {
-		validateOptions = append(validateOptions, jwt.WithAudience(this.audience))
+	if len(this.audience) > 0 {
+		expectedAudiences := this.audience
+		validateOptions = append(validateOptions, jwt.WithValidator(jwt.ValidatorFunc(func(_ context.Context, t jwt.Token) error {
+			tokenAudiences, _ := t.Audience()
+			for _, expected := range expectedAudiences {
+				if slices.Contains(tokenAudiences, expected) {
+					return nil
+				}
+			}
+			return fmt.Errorf("invalid audience: got %v, expected one of %v", tokenAudiences, expectedAudiences)
+		})))
 	}
 
 	if valErr := jwt.Validate(tok, validateOptions...); valErr != nil {

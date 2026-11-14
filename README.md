@@ -132,7 +132,7 @@ An essential design principle of Rays Web Security is its pluggable provider arc
 
 - `github.com/BeamFoundry/rays-web-security-oauth2`: Root module entry point.
 - `.../pkg/core`: Core domain models (`ClientRegistration`, `OAuth2AccessToken`, `OAuth2User`, `OAuth2Error`, `OAuth2AuthenticationToken`).
-- `.../pkg/jwt`: Cryptographic JWT signing (RSA/HMAC), verification, validation, and JSON Web Key Sets (`JWK`, `JWKSet`, `JWKSource`).
+- `.../pkg/jwt`: Cryptographic JWT signing (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512`), verification, validation, and JSON Web Key Sets (`JWK`, `JWKSet`, `JWKSource`).
 - `.../pkg/client`: Client repository, authorized client service, and authorized client manager.
 - `.../pkg/login`: OAuth2 login filter, authorization code exchange, and UserInfo/OIDC services.
 - `.../pkg/resourceserver`: Bearer token filter, token resolver, and JWT authentication provider.
@@ -628,22 +628,31 @@ An **OAuth2 Resource Server** protects HTTP endpoints by validating incoming OAu
 
 ### JWT Validation & JWK Sets
 
-For production environments, `rays-web-security-oauth2` integrates with **`github.com/lestrrat-go/jwx/v3`** (the Go equivalent of Java's Nimbus JOSE+JWT used by Spring Security).
+#### Choosing a `JwtDecoder`: `JwxJwtDecoder` vs `NimbusJwtDecoder`
 
-This provides full RFC 7515/7517/7518/7519 compliance and supports **all** signature algorithms:
-- **RSA:** `RS256`, `RS384`, `RS512`
-- **RSA-PSS:** `PS256`, `PS384`, `PS512`
-- **ECDSA:** `ES256`, `ES384`, `ES512` (P-256, P-384, P-521)
-- **EdDSA:** `Ed25519`
-- **HMAC:** `HS256`, `HS384`, `HS512`
+`rays-web-security-oauth2` provides two `JwtDecoder` implementations with complementary strengths:
 
-#### Remote JWKS Endpoint (with Key Rotation)
+| Feature / Use Case | `JwxJwtDecoder` | `NimbusJwtDecoder` |
+| :--- | :--- | :--- |
+| **Key Input** | Remote `jwks_uri` (`NewWithRemoteJWKS`) or `jwx/v3` `jwk.Set` (`NewWithKeySet`) | `JWKSource` interface (e.g., `RSAKeyManager`, custom PEM/KMS source) |
+| **Remote JWKS & Rotation** | Built-in (`jwk.Cache` + `httprc/v3` + `singleflight`) | Not built-in (delegates key lookup to `JWKSource`) |
+| **Standard Algorithms** | `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512` | `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512` (Go stdlib only) |
+| **Non-Stdlib Curves/Algs** | `ES256K` (secp256k1), `Ed448` via `jwx/v3` | Unsupported (`UnsupportedAlgorithmError`) |
+| **Audience Validation** | Variadic `WithAudience(aud ...string)` (OR-match) | Variadic `WithAudience(aud ...string)` (OR-match) |
+| **Runtime Lifecycle** | Spawns background JWKS refresh goroutines for remote JWKS | Stateless & synchronous per `Decode` call (zero external deps) |
+| **Error Granularity** | `JWKSFetchError`, `JwtParseError`, `JwtValidationError` | Granular (`AlgorithmMismatchError`, `UnknownKeyIdError`, `SignatureVerificationError`, `JwtExpiredError`, `JwtNotYetValidError`, `InvalidIssuerError`, `InvalidAudienceError`) |
+
+**Rule of thumb:**
+- Use **`JwxJwtDecoder`** when verifying tokens against an external Identity Provider's remote JWKS endpoint (`jwks_uri`) with automatic key rotation, when verifying from a `jwx` `jwk.Set`, or when you need non-stdlib algorithms like `ES256K` / `Ed448`.
+- Use **`NimbusJwtDecoder`** when verifying tokens against an in-process `JWKSource` (such as `RSAKeyManager`, shared HMAC secrets, or a custom PEM/KMS-backed `JWKSource`), when you want zero background goroutines and zero third-party crypto dependencies, or when you want granular error names in unit/integration tests.
+
+#### `JwxJwtDecoder`: Remote JWKS Endpoint (with Key Rotation)
 
 ```go
 func (this *DecoderConfig) JwtDecoder() JwtDecoder {
-    return JwxJwtDecoder{}.NewWithRemoteJWKS("https://auth.company.com/oauth2/jwks").
+    return NewJwxJwtDecoderWithRemoteJWKS("https://auth.company.com/oauth2/jwks").
         WithIssuer("https://auth.company.com").
-        WithAudience("my-api-audience").
+        WithAudience("my-api-audience", "my-api-v2").
         WithClockSkew(60 * time.Second)
 }
 
@@ -656,13 +665,68 @@ func (this *DecoderConfig) JwtAuthenticationProvider(
 }
 ```
 
+#### `NimbusJwtDecoder`: In-Process `JWKSource` (Go Stdlib Only)
+
+```go
+func (this *DecoderConfig) NimbusDecoder(
+    that struct {
+        jwkSource JWKSource `@:"Inject"`
+    },
+) JwtDecoder {
+    return NewNimbusJwtDecoder(that.jwkSource).
+        WithIssuer("https://auth.company.com").
+        WithAudience("my-api-audience", "my-api-v2").
+        WithClockSkew(60 * time.Second)
+}
+```
+
+#### Externalizing Decoder Settings with `ConfigurationProperties`
+
+Bind decoder settings from `application.yaml` using Rays' `ConfigurationProperties` (note that fields must be private/lowercase for exact-case matching):
+
+```yaml
+security:
+  oauth2:
+    resourceserver:
+      jwksURI: "https://auth.company.com/.well-known/jwks.json"
+      issuer: "https://auth.company.com"
+      audiences: ["my-api-audience", "my-api-v2"]
+      clockSkew: "60s"
+```
+
+```go
+type ResourceServerJwtProperties struct {
+    ConfigurationProperties `Name:"security.oauth2.resourceserver"`
+
+    jwksURI   string        `validate:"required,url"`
+    issuer    string        `validate:"required,url"`
+    audiences []string      `validate:"gt=0,dive,required"`
+    clockSkew time.Duration `validate:"gte=0"`
+}
+
+var _, _ = any(&ResourceServerJwtProperties{}).(Stereotype)
+
+func (this *DecoderConfig) JwtDecoder(
+    that struct {
+        props *ResourceServerJwtProperties `@:"Inject"`
+    },
+) JwtDecoder {
+    return NewJwxJwtDecoderWithRemoteJWKS(that.props.jwksURI).
+        WithIssuer(that.props.issuer).
+        WithAudience(that.props.audiences...).
+        WithClockSkew(that.props.clockSkew)
+}
+```
+
 #### Validations Performed
 
-1. **Cryptographic Signature:** Verifies RSA (RS256) or HMAC (HS256) using public keys matching the token's `kid` header.
-2. **Expiration (`exp`):** Rejects tokens whose expiration timestamp plus clock skew is in the past.
-3. **Not Before (`nbf`):** Rejects tokens that are not yet valid.
-4. **Issuer (`iss`):** Ensures the issuing authority matches the expected URL.
-5. **Audience (`aud`):** Ensures the token was intended for this specific resource server.
+Both `JwxJwtDecoder` and `NimbusJwtDecoder` enforce:
+
+1. **Cryptographic Signature:** Verifies the token's signature (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, or `HS256-512`) against the key matching `kid`, rejecting `alg: "none"` and mismatched key types or EC curves.
+2. **Expiration (`exp`):** Requires a valid positive numeric `exp` claim and rejects tokens past expiration plus clock skew (60s default).
+3. **Not Before (`nbf`):** When present, requires a valid positive numeric `nbf` claim and rejects tokens not yet active within clock skew.
+4. **Issuer (`iss`):** When `WithIssuer` is configured, ensures `iss` matches the expected issuer URL.
+5. **Audience (`aud`):** When `WithAudience` is configured, ensures at least one configured audience matches the token's `aud` claim.
 
 ### Claims & Authority Conversion
 
@@ -846,19 +910,147 @@ Calling `GET /.well-known/openid-configuration` returns:
 
 ### Key Management & Token Issuance
 
-`RSAKeyManager` generates and manages RSA key pairs:
+Choose the key management strategy that fits your environment:
+
+| Approach | Key Lifecycle | Best For |
+| :--- | :--- | :--- |
+| **`RSAKeyManager`** | Generates an ephemeral 2048-bit+ RSA keypair in memory on startup | Local development, quickstarts, and unit/integration tests |
+| **Rays `ConfigurationProperties` + Persistent Keys** | Loads persistent RSA / ECDSA / Ed25519 keys from PEM files or secret-injected config | Single-instance or multi-replica production services where tokens must survive restarts |
+| **Custom `JWKSource` (DB / KMS / Vault)** | Resolves active signing keys and historical verification keys dynamically by `kid` | Zero-downtime key rotation and centralized KMS/HSM signing |
+
+#### 1. Ephemeral Keys (`RSAKeyManager`)
+
+`RSAKeyManager` generates and manages an RSA key pair (`RS256`) in memory:
 
 ```go
-func (this *KeyConfig) JWKSource() JWKSource {
-    km, err := RSAKeyManager{}.New(2048, "auth-key-primary")
-    if err != nil {
-        panic(err)
-    }
-    return km
+func (this *KeyConfig) JWKSource() (JWKSource, error) {
+    return RSAKeyManager{}.New(2048, "auth-key-primary")
 }
 ```
 
-Using `JwxJwtEncoder`, you can also sign access tokens with ECDSA, Ed25519, or RSA-PSS:
+> [!WARNING]
+> Because `RSAKeyManager` generates a new keypair every time the process starts, previously issued tokens will fail verification after a restart or across multiple replicas. Use persistent externalized keys in production.
+
+#### 2. Persistent Keys with Rays `ConfigurationProperties` (Recommended for Production)
+
+Externalize key paths, `kid`, and algorithm settings in `application.yaml` (or environment variables mapped by Rays) and bind them using `ConfigurationProperties`:
+
+```yaml
+security:
+  oauth2:
+    jwt:
+      keyID: "auth-key-2026-01"
+      algorithm: "ES256"
+      privateKeyPath: "/etc/secrets/oauth2/ec-private.pem"
+```
+
+```go
+// 1. Bind and validate configuration properties (fields must be lowercase/private).
+type JwtKeyProperties struct {
+    ConfigurationProperties `Name:"security.oauth2.jwt"`
+
+    keyID          string `validate:"required"`
+    algorithm      string `validate:"required,oneof=RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512 EdDSA"`
+    privateKeyPath string `validate:"required,file"`
+}
+
+var _, _ = any(&JwtKeyProperties{}).(Stereotype)
+
+// 2. Implement JWKSource backed by the loaded keypair so /oauth2/jwks and NimbusJwtDecoder share it.
+type StaticECJWKSource struct {
+    kid  string
+    alg  string
+    priv *ecdsa.PrivateKey
+}
+
+func (this *StaticECJWKSource) GetSigningKey() (kid string, privateKey any, alg string, err Error) {
+    return this.kid, this.priv, this.alg, nil
+}
+
+func (this *StaticECJWKSource) GetVerificationKey(kid string) (publicKey any, alg string, err Error) {
+    if kid != "" && kid != this.kid {
+        return nil, "", NewError("UnknownKeyIdError", "unknown key id: "+kid)
+    }
+    return &this.priv.PublicKey, this.alg, nil
+}
+
+func (this *StaticECJWKSource) GetJWKSet() (*JWKSet, Error) {
+    pubBytes, err := this.priv.PublicKey.Bytes()
+    if err != nil {
+        return nil, NewErrorFrom(err)
+    }
+    coordSize := (this.priv.Curve.Params().BitSize + 7) / 8
+    return &JWKSet{
+        Keys: []JWK{{
+            Kty: "EC",
+            Use: "sig",
+            Alg: this.alg,
+            Kid: this.kid,
+            Crv: this.priv.Curve.Params().Name,
+            X:   base64.RawURLEncoding.EncodeToString(pubBytes[1 : 1+coordSize]),
+            Y:   base64.RawURLEncoding.EncodeToString(pubBytes[1+coordSize:]),
+        }},
+    }, nil
+}
+
+// 3. Register JWKSource and JwtEncoder beans; returning error fails startup cleanly if key loading fails.
+type ProductionKeyConfig struct {
+    Configuration
+}
+
+var _, _ = any(&ProductionKeyConfig{}).(Stereotype)
+
+func (this *ProductionKeyConfig) JWKSource(
+    that struct {
+        props *JwtKeyProperties `@:"Inject"`
+    },
+) (JWKSource, error) {
+    pemBytes, err := os.ReadFile(that.props.privateKeyPath)
+    if err != nil {
+        return nil, err
+    }
+    block, _ := pem.Decode(pemBytes)
+    if block == nil {
+        return nil, fmt.Errorf("failed to decode PEM private key from %s", that.props.privateKeyPath)
+    }
+    parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+    if err != nil {
+        return nil, err
+    }
+    ecPriv, ok := parsed.(*ecdsa.PrivateKey)
+    if !ok {
+        return nil, fmt.Errorf("expected *ecdsa.PrivateKey, got %T", parsed)
+    }
+    return &StaticECJWKSource{
+        kid:  that.props.keyID,
+        alg:  that.props.algorithm,
+        priv: ecPriv,
+    }, nil
+}
+
+func (this *ProductionKeyConfig) JwtEncoder(
+    that struct {
+        jwkSource JWKSource `@:"Inject"`
+    },
+) (JwtEncoder, error) {
+    kid, privKey, algName, err := that.jwkSource.GetSigningKey()
+    if err != nil {
+        return nil, err
+    }
+    alg, ok := jwa.LookupSignatureAlgorithm(algName)
+    if !ok {
+        return nil, fmt.Errorf("unsupported signature algorithm: %s", algName)
+    }
+    return NewJwxJwtEncoder(privKey, alg, kid), nil
+}
+```
+
+When hydrating verification keys from serialized JWK JSON (for example, in a custom `JWKSource` backed by a database or secret manager), `pkg/jwt` also provides stdlib JWK parsers:
+- `ParseRSAPublicKeyFromJWK(jwk *JWK) (*rsa.PublicKey, Error)`
+- `ParseECPublicKeyFromJWK(jwk *JWK) (*ecdsa.PublicKey, Error)` (`P-256`, `P-384`, `P-521`)
+- `ParseEd25519PublicKeyFromJWK(jwk *JWK) (ed25519.PublicKey, Error)` (`OKP` / `Ed25519`)
+
+Using `DefaultJwtEncoder` (for `RS256` / `HS256` from a `JWKSource`) or `JwxJwtEncoder`, you can sign access tokens with multiple algorithms:
 
 ```go
 // 1. ECDSA P-256 (ES256)
@@ -872,7 +1064,7 @@ encoder := JwxJwtEncoder{}.New(rsaPrivateKey, jwa.PS256(), "key-ps256")
 ```
 
 > [!IMPORTANT]
-> The `/oauth2/jwks` endpoint serves the public keys from the separately configured `JWKSource` Beam, **not** directly from `JwxJwtEncoder`. When configuring a custom token encoder (such as the ES256, EdDSA, or PS256 examples above), ensure that your registered `JWKSource` and the encoder share the exact same underlying key material and key identifier (`kid`) so that client applications and Resource Servers can successfully verify token signatures.
+> The `/oauth2/jwks` endpoint serves the public keys from the separately configured `JWKSource` Beam, **not** directly from `JwxJwtEncoder`. When configuring a custom token encoder (such as the ES256, EdDSA, or PS256 examples above), ensure that your registered `JWKSource` and the encoder share the exact same underlying key material, key identifier (`kid`), and published algorithm (`alg`) so that client applications, Resource Servers, and `NimbusJwtDecoder` / `JwxJwtDecoder` can verify token signatures.
 
 ---
 
@@ -1079,6 +1271,8 @@ func TestResourceServer(t *testing.T) {
 
 ### Testing Resource Server with Mock JWTs
 
+When testing Resource Server components or APIs secured with Bearer tokens, you can issue test tokens dynamically with `RSAKeyManager` (or `JwxJwtEncoder` for multi-algorithm keys) and verify them synchronously with `NimbusJwtDecoder` (which supports `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, and `HS256-512` via any `JWKSource` without spawning background JWKS refresh goroutines):
+
 ```go
 var _ = Describe("JwtAuthenticationProvider", func() {
     It("authenticates a valid Bearer token and returns JwtAuthenticationToken", func() {
@@ -1157,6 +1351,7 @@ Given the security-critical nature of OAuth 2.0 / OpenID Connect implementations
 1. **JWT Security Attack Test Suite (`pkg/jwt/security_attack_test.go`):**
    - **Algorithm Confusion Attacks:** Rejection of `alg: "none"`, `"NONE"`, mixed casing, and missing `alg` headers.
    - **RSA-to-HMAC Key Confusion Attacks:** Rejection of tokens signed with symmetric `HS256` using the RSA public key's modulus bytes ($N$) as HMAC secret.
+   - **Multi-Algorithm Key & Curve Confusion:** Rejection of ECDSA curve mismatches (e.g., `ES384` signed token against `P-256` key), cross-key-type confusion (e.g., `EdDSA` against RSA key), and malformed key or signature lengths.
    - **Signature Stripping Attacks:** Rejection of unsigned 2-part tokens (`header.payload`) and empty signatures (`header.payload.`).
    - **Signature Tampering Attacks:** Single-bit alteration detection.
    - **Header Injection & Path Traversal:** Safe handling of malicious `kid` headers (`../../../../etc/passwd`, SQL injection strings, XSS payloads).

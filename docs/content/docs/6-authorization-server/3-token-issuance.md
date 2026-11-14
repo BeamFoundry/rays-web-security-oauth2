@@ -49,9 +49,9 @@ func (this *KeyConfig) JWKSource() (JWKSource, error) {
 
 ---
 
-### 2. Persistent Keys with Rays `ConfigurationProperties` (Recommended for Production)
+### 2. Persistent ECDSA Keys with Rays `ConfigurationProperties` (Recommended for Production)
 
-In production, externalize key paths, `kid`, and algorithm settings in `application.yaml` (or environment variables mapped by Rays) and bind them using Rays' `ConfigurationProperties`:
+In production, externalize key paths, `kid`, and algorithm settings in `application.yaml` and bind them using Rays' `ConfigurationProperties`:
 
 ```yaml
 security:
@@ -62,11 +62,28 @@ security:
       privateKeyPath: "/etc/secrets/oauth2/ec-private.pem"
 ```
 
+> [!IMPORTANT]
+> Rays `ConfigurationProperties` binds private fields using **exact-case** key names (`keyID`, `privateKeyPath`), and `AddOverride` only overrides keys that already exist in loaded configuration. A default `APP_` / `RAYS_` environment-variable loop lowercases variable names (`APP_SECURITY_OAUTH2_JWT_KEYID` becomes `app.security.oauth2.jwt.keyid`), keeps the `app.` / `rays.` prefix, and **cannot** bind camelCase fields like `keyID` or `privateKeyPath` on its own. For environment-only deployments without `application.yaml`, map environment variables explicitly to the exact property names during container bootstrap:
+>
+> ```go
+> ctx := rays.ApplicationContext()
+> if err := ctx.LoadDefaultConfigAt(map[string]any{
+>     "keyID":          os.Getenv("OAUTH2_JWT_KEY_ID"),
+>     "algorithm":      os.Getenv("OAUTH2_JWT_ALGORITHM"),
+>     "privateKeyPath": os.Getenv("OAUTH2_JWT_PRIVATE_KEY_PATH"),
+> }, "security.oauth2.jwt"); err != nil {
+>     panic(err)
+> }
+> ```
+
+The example below binds an ECDSA keypair (`ES256`, `ES384`, or `ES512`). To issue RSA (`RS256-512`, `PS256-512`) or Ed25519 (`EdDSA`) tokens instead, load `*rsa.PrivateKey` or `ed25519.PrivateKey` and publish the matching `RSA` or `OKP` JWK in `GetJWKSet()`:
+
 ```go
 package configurations
 
 import (
     "crypto/ecdsa"
+    "crypto/elliptic"
     "crypto/x509"
     "encoding/base64"
     "encoding/pem"
@@ -79,18 +96,18 @@ import (
     . "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
 )
 
-// 1. Bind and validate configuration properties (fields must be lowercase/private).
+// 1. Bind and validate ECDSA configuration properties (fields must be lowercase/private).
 type JwtKeyProperties struct {
     ConfigurationProperties `Name:"security.oauth2.jwt"`
 
     keyID          string `validate:"required"`
-    algorithm      string `validate:"required,oneof=RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512 EdDSA"`
+    algorithm      string `validate:"required,oneof=ES256 ES384 ES512"`
     privateKeyPath string `validate:"required,file"`
 }
 
 var _, _ = any(&JwtKeyProperties{}).(Stereotype)
 
-// 2. Implement JWKSource backed by the loaded keypair so /oauth2/jwks and NimbusJwtDecoder share it.
+// 2. Implement JWKSource backed by the loaded EC keypair so /oauth2/jwks and NimbusJwtDecoder share it.
 type StaticECJWKSource struct {
     kid  string
     alg  string
@@ -127,7 +144,7 @@ func (this *StaticECJWKSource) GetJWKSet() (*JWKSet, Error) {
     }, nil
 }
 
-// 3. Register JWKSource and JwtEncoder beans; returning error fails startup cleanly if key loading fails.
+// 3. Register JWKSource and JwtEncoder beans; returning error fails startup cleanly if key loading or curve matching fails.
 type ProductionKeyConfig struct {
     Configuration
 }
@@ -154,6 +171,14 @@ func (this *ProductionKeyConfig) JWKSource(
     ecPriv, ok := parsed.(*ecdsa.PrivateKey)
     if !ok {
         return nil, fmt.Errorf("expected *ecdsa.PrivateKey, got %T", parsed)
+    }
+    expectedCurve := map[string]elliptic.Curve{
+        AlgES256: elliptic.P256(),
+        AlgES384: elliptic.P384(),
+        AlgES512: elliptic.P521(),
+    }[that.props.algorithm]
+    if expectedCurve == nil || ecPriv.Curve != expectedCurve {
+        return nil, fmt.Errorf("EC key curve %s does not match configured algorithm %s", ecPriv.Curve.Params().Name, that.props.algorithm)
     }
     return &StaticECJWKSource{
         kid:  that.props.keyID,

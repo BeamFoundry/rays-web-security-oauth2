@@ -722,9 +722,9 @@ func (this *DecoderConfig) JwtDecoder(
 
 Both `JwxJwtDecoder` and `NimbusJwtDecoder` enforce:
 
-1. **Cryptographic Signature:** Verifies the token's signature (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, or `HS256-512`) against the key matching `kid`, rejecting `alg: "none"` and mismatched key types. `NimbusJwtDecoder` additionally enforces strict RFC 7518 ECDSA algorithm-to-curve pairing (`ES256` with `P-256`, `ES384` with `P-384`, `ES512` with `P-521`).
+1. **Cryptographic Signature:** Verifies the token's signature (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, or `HS256-512`) against the key matching `kid`, rejecting unsigned tokens and mismatched key types. `NimbusJwtDecoder` explicitly checks the token's `alg` header (rejecting `alg: "none"`, missing `alg`, or `alg` mismatches) and enforces strict RFC 7518 ECDSA algorithm-to-curve pairing (`ES256` with `P-256`, `ES384` with `P-384`, `ES512` with `P-521`); `JwxJwtDecoder` relies on the matching JWK's algorithm when verifying the signature, so it may accept an `alg: "none"` header when a matching JWK specifies an algorithm such as `RS256` (while still verifying the cryptographic signature).
 2. **Expiration (`exp`):** Requires an `exp` claim and rejects tokens past expiration plus clock skew (60s default); `NimbusJwtDecoder` additionally requires `exp` to be a positive numeric JSON value.
-3. **Not Before (`nbf`):** When present, rejects tokens whose activation time is in the future within allowable clock skew; `NimbusJwtDecoder` additionally enforces a positive numeric JSON `nbf` value, whereas `JwxJwtDecoder` delegates `nbf` parsing and validation to `jwx/v3`.
+3. **Not Before (`nbf`):** When present, tokens with an activation time in the future within the allowable clock skew are accepted, and tokens beyond that skew are rejected; `NimbusJwtDecoder` additionally enforces a positive numeric JSON `nbf` value, whereas `JwxJwtDecoder` delegates `nbf` parsing and validation to `jwx/v3`.
 4. **Issuer (`iss`):** When `WithIssuer` is configured, ensures `iss` matches the expected issuer URL.
 5. **Audience (`aud`):** When `WithAudience` is configured, ensures at least one configured audience matches the token's `aud` claim.
 
@@ -958,7 +958,7 @@ security:
 > }
 > ```
 
-The example below binds an ECDSA keypair (`ES256`, `ES384`, or `ES512`). To issue RSA (`RS256-512`, `PS256-512`) or Ed25519 (`EdDSA`) tokens instead, load `*rsa.PrivateKey` or `ed25519.PrivateKey` and publish the matching `RSA` or `OKP` JWK in `GetJWKSet()`:
+The example below binds an ECDSA keypair (`ES256`, `ES384`, or `ES512`) from an **unencrypted PKCS #8 PEM** private key (`-----BEGIN PRIVATE KEY-----`) accepted by `x509.ParsePKCS8PrivateKey`; legacy SEC 1 (`-----BEGIN EC PRIVATE KEY-----`) PEM files are not supported without converting to PKCS #8 (or switching the loader to `x509.ParseECPrivateKey`). To issue RSA (`RS256-512`, `PS256-512`) or Ed25519 (`EdDSA`) tokens instead, load `*rsa.PrivateKey` or `ed25519.PrivateKey` and publish the matching `RSA` or `OKP` JWK in `GetJWKSet()`:
 
 ```go
 // 1. Bind and validate ECDSA configuration properties (fields must be lowercase/private).

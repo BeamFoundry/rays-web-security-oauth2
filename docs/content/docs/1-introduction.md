@@ -79,7 +79,7 @@ An essential design principle of Rays Web Security is its pluggable provider arc
 
 *   `github.com/BeamFoundry/rays-web-security-oauth2`: Root module entry point.
 *   `.../pkg/core`: Core domain models (`ClientRegistration`, `OAuth2AccessToken`, `OAuth2User`, `OAuth2Error`, `OAuth2AuthenticationToken`).
-*   `.../pkg/jwt`: Cryptographic JWT signing (RSA/HMAC), verification, validation, and JSON Web Key Sets (`JWK`, `JWKSet`, `JWKSource`).
+*   `.../pkg/jwt`: Cryptographic JWT signing (`RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, `HS256-512`), verification, validation, and JSON Web Key Sets (`JWK`, `JWKSet`, `JWKSource`).
 *   `.../pkg/client`: Client repository, authorized client service, and authorized client manager.
 *   `.../pkg/login`: OAuth2 login filter, authorization code exchange, and UserInfo/OIDC services.
 *   `.../pkg/resourceserver`: Bearer token filter, token resolver, and JWT authentication provider.

@@ -33,7 +33,7 @@ func TestResourceServer(t *testing.T) {
 
 ## 🛡️ Testing Resource Server with Mock JWTs
 
-When testing Resource Server components or APIs secured with Bearer tokens, you can issue test tokens dynamically with `RSAKeyManager` (or `JwxJwtEncoder` for multi-algorithm keys):
+When testing Resource Server components or APIs secured with Bearer tokens, you can issue test tokens dynamically with `RSAKeyManager` (or `JwxJwtEncoder` for multi-algorithm keys) and verify them synchronously with `NimbusJwtDecoder` (which supports `RS256-512`, `PS256-512`, `ES256-512`, `EdDSA`, and `HS256-512` via any `JWKSource` without spawning background JWKS refresh goroutines):
 
 ```go
 var _ = Describe("JwtAuthenticationProvider", func() {

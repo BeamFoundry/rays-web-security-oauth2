@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -267,6 +268,11 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			// Invalid E base64
 			_, err = ParseRSAPublicKeyFromJWK(&JWK{N: validJWK.N, E: "!!!invalid"})
 			Expect(err).To(HaveOccurred())
+
+			// Nil JWK
+			_, err = ParseRSAPublicKeyFromJWK(nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("InvalidJWKError"))
 		})
 
 		It("tests JwxJwtDecoder with remote JWKS HTTP server, skew and audience mismatch", func() {
@@ -564,11 +570,12 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(err).To(HaveOccurred())
 
 			// Unsupported algorithm
-			unsupportedHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"ES512","typ":"JWT","kid":"hmac-1"}`))
+			unsupportedHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"ES256K","typ":"JWT","kid":"hmac-1"}`))
 			unsupportedTok := unsupportedHeader + "." + rawClaims + "." + rawSig
-			unsupportedSource := &testMockJWKSource{secret: []byte("secret"), alg: "ES512"}
+			unsupportedSource := &testMockJWKSource{secret: []byte("secret"), alg: "ES256K"}
 			_, err = NewNimbusJwtDecoder(unsupportedSource).Decode(unsupportedTok)
 			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("UnsupportedAlgorithmError"))
 
 			// JwxJwtEncoder with invalid key
 			invalidJwxEncoder := NewJwxJwtEncoder("not-a-valid-key", jwa.RS256(), "k1")
@@ -703,16 +710,27 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			_, decErr = decAud.Decode(tokBadAud.TokenValue)
 			Expect(decErr).To(HaveOccurred())
 
-			// nbf with non-numeric claim
+			// nbf with non-numeric claim is rejected
 			claimsWithBadNbf := NewJwtClaimsSet()
 			claimsWithBadNbf.Subject = "bad-nbf-user"
 			claimsWithBadNbf.ExpiresAt = time.Now().Add(time.Hour)
 			claimsWithBadNbf.Claims["nbf"] = "non-numeric-nbf"
 			tokBadNbf, encErr := NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{ClaimsSet: claimsWithBadNbf})
 			Expect(encErr).NotTo(HaveOccurred())
-			decodedBadNbf, decErr := NewNimbusJwtDecoder(kmDefault).Decode(tokBadNbf.TokenValue)
-			Expect(decErr).NotTo(HaveOccurred())
-			Expect(decodedBadNbf).NotTo(BeNil())
+			_, decErr = NewNimbusJwtDecoder(kmDefault).Decode(tokBadNbf.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("JwtNotYetValidError"))
+
+			// nbf with zero or negative claim is rejected
+			claimsWithZeroNbf := NewJwtClaimsSet()
+			claimsWithZeroNbf.Subject = "zero-nbf-user"
+			claimsWithZeroNbf.ExpiresAt = time.Now().Add(time.Hour)
+			claimsWithZeroNbf.Claims["nbf"] = 0
+			tokZeroNbf, encErr := NewDefaultJwtEncoder(kmDefault).Encode(&JwtEncoderParameters{ClaimsSet: claimsWithZeroNbf})
+			Expect(encErr).NotTo(HaveOccurred())
+			_, decErr = NewNimbusJwtDecoder(kmDefault).Decode(tokZeroNbf.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("JwtNotYetValidError"))
 
 			// JwxJwtEncoder error cases: invalid signKey type
 			badKeyEncoder := NewJwxJwtEncoder(12345, jwa.RS256(), "bad-key")
@@ -876,6 +894,221 @@ var _ = Describe("JwxJwtEncoder & JwxJwtDecoder", func() {
 			Expect(decoded.Headers).To(HaveKeyWithValue("kid", "k-test-whitespace"))
 			Expect(decoded.Headers).To(HaveKeyWithValue("alg", "RS256"))
 			Expect(decoded.Subject()).To(Equal("sub-ws"))
+		})
+	})
+
+	Context("NimbusJwtDecoder multi-algorithm parity and JWK helpers", func() {
+		It("verifies tokens signed with RS256-512, PS256-512, ES256-512, EdDSA, and HS256-512", func() {
+			rsaPriv, rsaErr := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(rsaErr).NotTo(HaveOccurred())
+			p256Priv, p256Err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			Expect(p256Err).NotTo(HaveOccurred())
+			p384Priv, p384Err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+			Expect(p384Err).NotTo(HaveOccurred())
+			p521Priv, p521Err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+			Expect(p521Err).NotTo(HaveOccurred())
+			edPub, edPriv, edErr := ed25519.GenerateKey(rand.Reader)
+			Expect(edErr).NotTo(HaveOccurred())
+			hmacSecret := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+			type algCase struct {
+				signKey   any
+				verifyKey any
+				name      string
+				nimbusAlg string
+				jwxAlg    jwa.SignatureAlgorithm
+			}
+			cases := []algCase{
+				{name: "RS256", jwxAlg: jwa.RS256(), nimbusAlg: AlgRS256, signKey: rsaPriv, verifyKey: &rsaPriv.PublicKey},
+				{name: "RS384", jwxAlg: jwa.RS384(), nimbusAlg: AlgRS384, signKey: rsaPriv, verifyKey: &rsaPriv.PublicKey},
+				{name: "RS512", jwxAlg: jwa.RS512(), nimbusAlg: AlgRS512, signKey: rsaPriv, verifyKey: &rsaPriv.PublicKey},
+				{name: "PS256", jwxAlg: jwa.PS256(), nimbusAlg: AlgPS256, signKey: rsaPriv, verifyKey: &rsaPriv.PublicKey},
+				{name: "PS384", jwxAlg: jwa.PS384(), nimbusAlg: AlgPS384, signKey: rsaPriv, verifyKey: &rsaPriv.PublicKey},
+				{name: "PS512", jwxAlg: jwa.PS512(), nimbusAlg: AlgPS512, signKey: rsaPriv, verifyKey: &rsaPriv.PublicKey},
+				{name: "ES256", jwxAlg: jwa.ES256(), nimbusAlg: AlgES256, signKey: p256Priv, verifyKey: &p256Priv.PublicKey},
+				{name: "ES384", jwxAlg: jwa.ES384(), nimbusAlg: AlgES384, signKey: p384Priv, verifyKey: &p384Priv.PublicKey},
+				{name: "ES512", jwxAlg: jwa.ES512(), nimbusAlg: AlgES512, signKey: p521Priv, verifyKey: &p521Priv.PublicKey},
+				{name: "EdDSA", jwxAlg: jwa.EdDSA(), nimbusAlg: AlgEdDSA, signKey: edPriv, verifyKey: edPub},
+				{name: "HS256", jwxAlg: jwa.HS256(), nimbusAlg: AlgHS256, signKey: hmacSecret, verifyKey: hmacSecret},
+				{name: "HS384", jwxAlg: jwa.HS384(), nimbusAlg: AlgHS384, signKey: hmacSecret, verifyKey: hmacSecret},
+				{name: "HS512", jwxAlg: jwa.HS512(), nimbusAlg: AlgHS512, signKey: hmacSecret, verifyKey: hmacSecret},
+			}
+
+			for _, tc := range cases {
+				encoder := NewJwxJwtEncoder(tc.signKey, tc.jwxAlg, "key-"+tc.name)
+				claims := NewJwtClaimsSet()
+				claims.Issuer = "https://auth.example.com"
+				claims.Subject = "user-" + tc.name
+				claims.Audience = []string{"aud-a", "aud-b"}
+				claims.IssuedAt = time.Now().Add(-time.Minute)
+				claims.ExpiresAt = time.Now().Add(time.Hour)
+
+				tok, encErr := encoder.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+				Expect(encErr).NotTo(HaveOccurred(), tc.name)
+
+				src := &testMockJWKSource{secret: tc.verifyKey, alg: tc.nimbusAlg}
+				decoder := NewNimbusJwtDecoder(src).
+					WithIssuer("https://auth.example.com").
+					WithAudience("aud-c", "aud-b")
+
+				decoded, decErr := decoder.Decode(" \t" + tok.TokenValue + "\n ")
+				Expect(decErr).NotTo(HaveOccurred(), tc.name)
+				Expect(decoded.Subject()).To(Equal("user-"+tc.name), tc.name)
+				Expect(decoded.IssuedAt.IsZero()).To(BeFalse(), tc.name)
+				Expect(decoded.ExpiresAt.IsZero()).To(BeFalse(), tc.name)
+
+				// Tampered signature must fail
+				tampered := tok.TokenValue[:len(tok.TokenValue)-4] + "AAAA"
+				if tampered == tok.TokenValue {
+					tampered = tok.TokenValue[:len(tok.TokenValue)-4] + "BBBB"
+				}
+				_, badSigErr := decoder.Decode(tampered)
+				Expect(badSigErr).To(HaveOccurred(), tc.name)
+				Expect(badSigErr.Name()).To(Equal("SignatureVerificationError"), tc.name)
+			}
+
+			// PS256 with non-RSA key returns InvalidPublicKeyError
+			psTok, psErr := NewJwxJwtEncoder(rsaPriv, jwa.PS256(), "ps-bad-key").Encode(&JwtEncoderParameters{
+				ClaimsSet: func() *JwtClaimsSet {
+					c := NewJwtClaimsSet()
+					c.ExpiresAt = time.Now().Add(time.Hour)
+					return c
+				}(),
+			})
+			Expect(psErr).NotTo(HaveOccurred())
+			_, badKeyErr := NewNimbusJwtDecoder(&testMockJWKSource{secret: &p256Priv.PublicKey, alg: AlgPS256}).Decode(psTok.TokenValue)
+			Expect(badKeyErr).To(HaveOccurred())
+			Expect(badKeyErr.Name()).To(Equal("InvalidPublicKeyError"))
+
+			// ES256 with non-EC key returns InvalidPublicKeyError
+			esTok, esErr := NewJwxJwtEncoder(p256Priv, jwa.ES256(), "es-bad-key").Encode(&JwtEncoderParameters{
+				ClaimsSet: func() *JwtClaimsSet {
+					c := NewJwtClaimsSet()
+					c.ExpiresAt = time.Now().Add(time.Hour)
+					return c
+				}(),
+			})
+			Expect(esErr).NotTo(HaveOccurred())
+			_, badECKeyErr := NewNimbusJwtDecoder(&testMockJWKSource{secret: &rsaPriv.PublicKey, alg: AlgES256}).Decode(esTok.TokenValue)
+			Expect(badECKeyErr).To(HaveOccurred())
+			Expect(badECKeyErr.Name()).To(Equal("InvalidPublicKeyError"))
+		})
+
+		It("returns InvalidJWKSourceError when NimbusJwtDecoder has nil jwkSource", func() {
+			decoder := NewNimbusJwtDecoder(nil)
+			_, err := decoder.Decode("a.b.c")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Name()).To(Equal("InvalidJWKSourceError"))
+		})
+
+		It("supports variadic WithAudience in JwxJwtDecoder with OR matching", func() {
+			rsaPriv, rsaErr := rsa.GenerateKey(rand.Reader, 2048)
+			Expect(rsaErr).NotTo(HaveOccurred())
+
+			pubJWK, jwkErr := jwk.Import(&rsaPriv.PublicKey)
+			Expect(jwkErr).NotTo(HaveOccurred())
+			Expect(pubJWK.Set(jwk.KeyIDKey, "aud-k1")).To(Succeed())
+			Expect(pubJWK.Set(jwk.AlgorithmKey, jwa.RS256())).To(Succeed())
+			set := jwk.NewSet()
+			Expect(set.AddKey(pubJWK)).To(Succeed())
+
+			enc := NewJwxJwtEncoder(rsaPriv, jwa.RS256(), "aud-k1")
+			claims := NewJwtClaimsSet()
+			claims.Subject = "aud-user"
+			claims.Audience = []string{"svc-billing"}
+			claims.ExpiresAt = time.Now().Add(time.Hour)
+			tok, encErr := enc.Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+
+			// Variadic call
+			decVariadic := NewJwxJwtDecoderWithKeySet(set).WithAudience("svc-orders", "svc-billing")
+			decoded, decErr := decVariadic.Decode(tok.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decoded.Subject()).To(Equal("aud-user"))
+
+			// Chained calls
+			decChained := NewJwxJwtDecoderWithKeySet(set).WithAudience("svc-orders").WithAudience("svc-billing")
+			decodedChained, decErr := decChained.Decode(tok.TokenValue)
+			Expect(decErr).NotTo(HaveOccurred())
+			Expect(decodedChained.Subject()).To(Equal("aud-user"))
+
+			// None matching
+			decMismatch := NewJwxJwtDecoderWithKeySet(set).WithAudience("svc-orders", "svc-shipping")
+			_, decErr = decMismatch.Decode(tok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("JwtValidationError"))
+		})
+
+		It("parses valid and rejects invalid EC and Ed25519 JWKs", func() {
+			// EC P-256, P-384, P-521
+			for _, tc := range []struct {
+				curve elliptic.Curve
+				name  string
+			}{
+				{curve: elliptic.P256(), name: "P-256"},
+				{curve: elliptic.P384(), name: "P-384"},
+				{curve: elliptic.P521(), name: "P-521"},
+			} {
+				priv, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+				Expect(err).NotTo(HaveOccurred())
+
+				coordBytes := (tc.curve.Params().BitSize + 7) / 8
+				pubBytes, bytesErr := priv.PublicKey.Bytes()
+				Expect(bytesErr).NotTo(HaveOccurred())
+
+				ecJWK := &JWK{
+					Kty: "EC",
+					Crv: tc.name,
+					X:   base64.RawURLEncoding.EncodeToString(pubBytes[1 : 1+coordBytes]),
+					Y:   base64.RawURLEncoding.EncodeToString(pubBytes[1+coordBytes:]),
+				}
+				parsedEC, parseErr := ParseECPublicKeyFromJWK(ecJWK)
+				Expect(parseErr).NotTo(HaveOccurred())
+				Expect(parsedEC.Curve).To(Equal(tc.curve))
+				Expect(parsedEC.Equal(&priv.PublicKey)).To(BeTrue())
+			}
+
+			// EC error cases
+			_, err := ParseECPublicKeyFromJWK(nil)
+			Expect(err).To(HaveOccurred())
+			_, err = ParseECPublicKeyFromJWK(&JWK{Kty: "RSA", Crv: "P-256"})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseECPublicKeyFromJWK(&JWK{Kty: "EC", Crv: "secp256k1"})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseECPublicKeyFromJWK(&JWK{Kty: "EC", Crv: "P-256", X: "!!!", Y: "AA"})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseECPublicKeyFromJWK(&JWK{Kty: "EC", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString(make([]byte, 32)), Y: "!!!"})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseECPublicKeyFromJWK(&JWK{Kty: "EC", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString([]byte{1, 2}), Y: base64.RawURLEncoding.EncodeToString(make([]byte, 32))})
+			Expect(err).To(HaveOccurred())
+			// Zero point (not on curve / infinity)
+			zeroCoord := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+			_, err = ParseECPublicKeyFromJWK(&JWK{Kty: "EC", Crv: "P-256", X: zeroCoord, Y: zeroCoord})
+			Expect(err).To(HaveOccurred())
+
+			// Ed25519
+			edPub, _, edErr := ed25519.GenerateKey(rand.Reader)
+			Expect(edErr).NotTo(HaveOccurred())
+			edJWK := &JWK{
+				Kty: "OKP",
+				Crv: tls.Ed25519.String(),
+				X:   base64.RawURLEncoding.EncodeToString(edPub),
+			}
+			parsedEd, edParseErr := ParseEd25519PublicKeyFromJWK(edJWK)
+			Expect(edParseErr).NotTo(HaveOccurred())
+			Expect(parsedEd).To(Equal(edPub))
+
+			// Ed25519 error cases
+			_, err = ParseEd25519PublicKeyFromJWK(nil)
+			Expect(err).To(HaveOccurred())
+			_, err = ParseEd25519PublicKeyFromJWK(&JWK{Kty: "EC", Crv: tls.Ed25519.String()})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseEd25519PublicKeyFromJWK(&JWK{Kty: "OKP", Crv: "Ed448"})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseEd25519PublicKeyFromJWK(&JWK{Kty: "OKP", Crv: tls.Ed25519.String(), X: "!!!"})
+			Expect(err).To(HaveOccurred())
+			_, err = ParseEd25519PublicKeyFromJWK(&JWK{Kty: "OKP", Crv: tls.Ed25519.String(), X: base64.RawURLEncoding.EncodeToString([]byte("short"))})
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

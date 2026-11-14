@@ -1,12 +1,17 @@
 package jwt_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	. "github.com/BeamFoundry/rays-web-security-oauth2/pkg/jwt"
@@ -227,6 +232,61 @@ var _ = Describe("OAuth2 & JWT Security Attack Vectors", func() {
 			_, decErr := jwxDec.Decode(tamperedTok)
 			Expect(decErr).To(HaveOccurred())
 			Expect(decErr.Name()).To(Equal("JwtParseError"))
+		})
+	})
+
+	Context("Multi-Algorithm Key & Curve Confusion Boundaries", func() {
+		It("rejects ECDSA curve mismatches, cross-key-type confusion, and malformed signature lengths", func() {
+			p256Priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			Expect(err).NotTo(HaveOccurred())
+			p384Priv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+			Expect(err).NotTo(HaveOccurred())
+			edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
+			Expect(err).NotTo(HaveOccurred())
+
+			claims := NewJwtClaimsSet()
+			claims.Subject = "victim"
+			claims.ExpiresAt = time.Now().Add(10 * time.Minute)
+
+			// Sign valid ES384 token, verify with P-256 key (alg="" so curve check in verifyECDSA is exercised)
+			es384Tok, encErr := NewJwxJwtEncoder(p384Priv, jwa.ES384(), "ec-k1").Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+			p256NoAlgDec := NewNimbusJwtDecoder(&testMockJWKSource{secret: &p256Priv.PublicKey, alg: ""})
+			_, decErr := p256NoAlgDec.Decode(es384Tok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("InvalidPublicKeyError"))
+
+			// Truncated ECDSA signature length
+			parts := strings.Split(es384Tok.TokenValue, ".")
+			Expect(parts).To(HaveLen(3))
+			shortSig := base64.RawURLEncoding.EncodeToString([]byte("short-ecdsa-sig"))
+			p384Dec := NewNimbusJwtDecoder(&testMockJWKSource{secret: &p384Priv.PublicKey, alg: AlgES384})
+			_, decErr = p384Dec.Decode(parts[0] + "." + parts[1] + "." + shortSig)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("SignatureVerificationError"))
+
+			// Cross-key-type confusion: EdDSA token verified with RSA key (alg="" bypasses expectedAlg check)
+			edTok, encErr := NewJwxJwtEncoder(edPriv, jwa.EdDSA(), "ed-k1").Encode(&JwtEncoderParameters{ClaimsSet: claims})
+			Expect(encErr).NotTo(HaveOccurred())
+			rsaPub, _, keyErr := km.GetVerificationKey("security-test-key")
+			Expect(keyErr).NotTo(HaveOccurred())
+			rsaNoAlgDec := NewNimbusJwtDecoder(&testMockJWKSource{secret: rsaPub, alg: ""})
+			_, decErr = rsaNoAlgDec.Decode(edTok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("InvalidPublicKeyError"))
+
+			// Malformed Ed25519 key length and signature length
+			badEdKeyDec := NewNimbusJwtDecoder(&testMockJWKSource{secret: ed25519.PublicKey([]byte("too-short")), alg: AlgEdDSA})
+			_, decErr = badEdKeyDec.Decode(edTok.TokenValue)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("InvalidPublicKeyError"))
+
+			edParts := strings.Split(edTok.TokenValue, ".")
+			Expect(edParts).To(HaveLen(3))
+			goodEdDec := NewNimbusJwtDecoder(&testMockJWKSource{secret: edPub, alg: AlgEdDSA})
+			_, decErr = goodEdDec.Decode(edParts[0] + "." + edParts[1] + "." + shortSig)
+			Expect(decErr).To(HaveOccurred())
+			Expect(decErr.Name()).To(Equal("SignatureVerificationError"))
 		})
 	})
 })

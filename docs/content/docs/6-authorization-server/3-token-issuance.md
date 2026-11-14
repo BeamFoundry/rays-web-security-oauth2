@@ -76,7 +76,7 @@ security:
 > }
 > ```
 
-The example below binds an ECDSA keypair (`ES256`, `ES384`, or `ES512`). To issue RSA (`RS256-512`, `PS256-512`) or Ed25519 (`EdDSA`) tokens instead, load `*rsa.PrivateKey` or `ed25519.PrivateKey` and publish the matching `RSA` or `OKP` JWK in `GetJWKSet()`:
+The example below binds an ECDSA keypair (`ES256`, `ES384`, or `ES512`) from an **unencrypted PKCS #8 PEM** private key (`-----BEGIN PRIVATE KEY-----`) accepted by `x509.ParsePKCS8PrivateKey`; legacy SEC 1 (`-----BEGIN EC PRIVATE KEY-----`) PEM files are not supported without converting to PKCS #8 (or switching the loader to `x509.ParseECPrivateKey`). To issue RSA (`RS256-512`, `PS256-512`) or Ed25519 (`EdDSA`) tokens instead, load `*rsa.PrivateKey` or `ed25519.PrivateKey` and publish the matching `RSA` or `OKP` JWK in `GetJWKSet()`:
 
 ```go
 package configurations

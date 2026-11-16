@@ -96,6 +96,70 @@ var _ = Describe("RegisteredClientRepository", func() {
 	})
 })
 
+var _ = Describe("RegisteredClientBuilder", func() {
+	It("can build a full registered client", func() {
+		client := RegisteredClientBuilder{}.New("uuid-client-1").
+			ClientID("portal-app").
+			ClientSecret("secret123").
+			ClientName("Portal Application").
+			ClientAuthenticationMethod(ClientAuthMethodBasic, ClientAuthMethodPost).
+			AuthorizationGrantType(GrantTypeAuthorizationCode, GrantTypeRefreshToken).
+			RedirectURI("https://portal.example.com/callback", "https://portal.example.com/callback2").
+			Scope("openid", "profile", "email").
+			RequireProofKey(true).
+			AccessTokenTimeToLive(30 * time.Minute).
+			RefreshTokenTimeToLive(7 * 24 * time.Hour).
+			Build()
+
+		Expect(client.ID).To(Equal("uuid-client-1"))
+		Expect(client.ClientID).To(Equal("portal-app"))
+		Expect(client.ClientSecret).To(Equal("secret123"))
+		Expect(client.ClientName).To(Equal("Portal Application"))
+		Expect(client.ClientAuthenticationMethods).To(Equal([]ClientAuthenticationMethod{ClientAuthMethodBasic, ClientAuthMethodPost}))
+		Expect(client.AuthorizationGrantTypes).To(Equal([]AuthorizationGrantType{GrantTypeAuthorizationCode, GrantTypeRefreshToken}))
+		Expect(client.RedirectURIs).To(Equal([]string{"https://portal.example.com/callback", "https://portal.example.com/callback2"}))
+		Expect(client.Scopes).To(ConsistOf("openid", "profile", "email"))
+		Expect(client.RequireProofKey).To(BeTrue())
+		Expect(client.AccessTokenTimeToLive).To(Equal(30 * time.Minute))
+		Expect(client.RefreshTokenTimeToLive).To(Equal(7 * 24 * time.Hour))
+	})
+
+	It("initializes defaults via NewRegisteredClient and isolates built slices", func() {
+		builder := NewRegisteredClient("spa-1").
+			ClientID("spa-client").
+			ClientAuthenticationMethod(ClientAuthMethodNone).
+			AuthorizationGrantType(GrantTypeAuthorizationCode).
+			RedirectURI("https://spa.example.com/cb").
+			Scope("openid")
+
+		first := builder.Build()
+		Expect(first.ID).To(Equal("spa-1"))
+		Expect(first.ClientID).To(Equal("spa-client"))
+		Expect(first.RequireProofKey).To(BeFalse())
+		Expect(first.AccessTokenTimeToLive).To(Equal(time.Duration(0)))
+		Expect(first.RefreshTokenTimeToLive).To(Equal(time.Duration(0)))
+
+		// Further builder mutations should not alter previously built RegisteredClient.
+		builder.Scope("profile").RedirectURI("https://spa.example.com/cb2")
+		second := builder.Build()
+		Expect(first.Scopes).To(Equal([]string{"openid"}))
+		Expect(first.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb"}))
+		Expect(second.Scopes).To(Equal([]string{"openid", "profile"}))
+		Expect(second.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb", "https://spa.example.com/cb2"}))
+
+		// Minimal client keeps non-nil empty slices.
+		minimal := NewRegisteredClient("min-1").Build()
+		Expect(minimal.ClientAuthenticationMethods).NotTo(BeNil())
+		Expect(minimal.ClientAuthenticationMethods).To(BeEmpty())
+		Expect(minimal.AuthorizationGrantTypes).NotTo(BeNil())
+		Expect(minimal.AuthorizationGrantTypes).To(BeEmpty())
+		Expect(minimal.RedirectURIs).NotTo(BeNil())
+		Expect(minimal.RedirectURIs).To(BeEmpty())
+		Expect(minimal.Scopes).NotTo(BeNil())
+		Expect(minimal.Scopes).To(BeEmpty())
+	})
+})
+
 var _ = Describe("OAuth2AuthorizationService", func() {
 	It("saves, finds, and removes authorizations by various token types", func() {
 		service := InMemoryOAuth2AuthorizationService{}.New()

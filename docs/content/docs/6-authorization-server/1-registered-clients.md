@@ -11,6 +11,8 @@ A `RegisteredClient` defines the permissions, credentials, and constraints of a 
 
 ## 🛠️ Registering a Client
 
+Use `RegisteredClientBuilder` (or `NewRegisteredClient`) to fluently construct registered clients:
+
 ```go
 package configurations
 
@@ -28,29 +30,27 @@ type ClientsConfig struct {
 
 func (this *ClientsConfig) RegisteredClientRepository() RegisteredClientRepository {
     // 1. Single-Page App (SPA) with PKCE
-    spaClient := &RegisteredClient{
-        ID:                         "spa-client-1",
-        ClientID:                   "my-react-app",
-        ClientName:                 "My React App",
-        ClientAuthenticationMethods: []ClientAuthenticationMethod{ClientAuthMethodNone},
-        AuthorizationGrantTypes:    []AuthorizationGrantType{GrantTypeAuthorizationCode},
-        RedirectURIs:               []string{"http://localhost:3000/callback"},
-        Scopes:                     []string{"openid", "profile", "orders:read"},
-        RequireProofKey:            true, // Enforces PKCE (S256)
-        AccessTokenTimeToLive:      30 * time.Minute,
-    }
+    spaClient := RegisteredClientBuilder{}.New("spa-client-1").
+        ClientID("my-react-app").
+        ClientName("My React App").
+        ClientAuthenticationMethod(ClientAuthMethodNone).
+        AuthorizationGrantType(GrantTypeAuthorizationCode).
+        RedirectURI("http://localhost:3000/callback").
+        Scope("openid", "profile", "orders:read").
+        RequireProofKey(true). // Enforces PKCE (S256)
+        AccessTokenTimeToLive(30 * time.Minute).
+        Build()
 
     // 2. Machine-to-Machine Backend Service
-    m2mClient := &RegisteredClient{
-        ID:                         "m2m-client-2",
-        ClientID:                   "billing-worker",
-        ClientSecret:               "worker-super-secret",
-        ClientName:                 "Billing Worker",
-        ClientAuthenticationMethods: []ClientAuthenticationMethod{ClientAuthMethodBasic},
-        AuthorizationGrantTypes:    []AuthorizationGrantType{GrantTypeClientCredentials},
-        Scopes:                     []string{"billing:write", "invoices:read"},
-        AccessTokenTimeToLive:      1 * time.Hour,
-    }
+    m2mClient := RegisteredClientBuilder{}.New("m2m-client-2").
+        ClientID("billing-worker").
+        ClientSecret("worker-super-secret").
+        ClientName("Billing Worker").
+        ClientAuthenticationMethod(ClientAuthMethodBasic).
+        AuthorizationGrantType(GrantTypeClientCredentials).
+        Scope("billing:write", "invoices:read").
+        AccessTokenTimeToLive(1 * time.Hour).
+        Build()
 
     return InMemoryRegisteredClientRepository{}.New(spaClient, m2mClient)
 }
@@ -60,4 +60,4 @@ func (this *ClientsConfig) RegisteredClientRepository() RegisteredClientReposito
 
 ## 🔒 PKCE Enforcement
 
-Setting `RequireProofKey: true` guarantees that the authorization server strictly enforces RFC 7636 (PKCE). Any authorization request without a `code_challenge` or with a method other than `S256` is rejected immediately.
+Setting `RequireProofKey(true)` (or `RequireProofKey: true` on `RegisteredClient`) guarantees that the authorization server strictly enforces RFC 7636 (PKCE). Any authorization request without a `code_challenge` or with a method other than `S256` is rejected immediately.

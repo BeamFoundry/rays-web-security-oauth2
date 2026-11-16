@@ -55,7 +55,7 @@ var _ SecurityFilter = &OAuth2LoginAuthenticationFilter{}
 
 var _ SecurityEndpointRegistration = &OAuth2LoginAuthenticationFilter{}
 
-var _ BeamPostConstructWithContext = &OAuth2LoginAuthenticationFilter{}
+var _ BeamPrototypeWithContext = &OAuth2LoginAuthenticationFilter{}
 
 // New creates a new OAuth2LoginAuthenticationFilter with default endpoints and a session-backed AuthorizationRequestRepository.
 func (this OAuth2LoginAuthenticationFilter) New(
@@ -125,7 +125,7 @@ func (this *OAuth2LoginAuthenticationFilter) Config() *OAuth2LoginConfig {
 	return this.config
 }
 
-// WithContext implements BeamPostConstructWithContext for prototype injection into HttpSecurity
+// WithContext implements BeamPrototypeWithContext for prototype injection into HttpSecurity
 func (this *OAuth2LoginAuthenticationFilter) WithContext(ctx context.Context) Error {
 	if repo, ok := this.injectedClientRepo.Get(); ok {
 		this.clientRegistrationRepo = repo

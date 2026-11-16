@@ -77,9 +77,9 @@ type BearerTokenAuthenticationFilter struct {
 }
 
 var (
-	_, _                              = any(&BearerTokenAuthenticationFilter{}).(Stereotype)
-	_    SecurityFilter               = &BearerTokenAuthenticationFilter{}
-	_    BeamPostConstructWithContext = &BearerTokenAuthenticationFilter{}
+	_, _                          = any(&BearerTokenAuthenticationFilter{}).(Stereotype)
+	_    SecurityFilter           = &BearerTokenAuthenticationFilter{}
+	_    BeamPrototypeWithContext = &BearerTokenAuthenticationFilter{}
 )
 
 // New creates a new BearerTokenAuthenticationFilter with a DefaultBearerTokenResolver and default realm name.
@@ -141,7 +141,7 @@ func (this *BearerTokenAuthenticationFilter) Config() *BearerTokenConfig {
 	return this.config
 }
 
-// WithContext implements BeamPostConstructWithContext for prototype injection into HttpSecurity
+// WithContext implements BeamPrototypeWithContext for prototype injection into HttpSecurity
 func (this *BearerTokenAuthenticationFilter) WithContext(ctx context.Context) Error {
 	if resolver, ok := this.injectedTokenResolver.Get(); ok {
 		this.tokenResolver = resolver

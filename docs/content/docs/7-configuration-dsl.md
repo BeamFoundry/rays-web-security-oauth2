@@ -23,7 +23,7 @@ weight: 7
 > You no longer need to pre-initialize a local `builder := &HttpSecurityBuilder{}` and manually pass it into configurers. Instead, you can chain directly into `(&HttpSecurityBuilder{}).With(OAuth2Login)`, configure your options fluently, and call `.And()` to return back to the `HttpSecurityBuilder`!
 
 > **Note on Prototype SecurityFilter Injection & Dependency Injection:**
-> Custom security filters (`OAuth2LoginAuthenticationFilter`, `BearerTokenAuthenticationFilter`, `OAuth2AuthorizationServerFilter`) are Prototype Beams implementing Rays' `BeamPostConstructWithContext` interface.
+> Custom security filters (`OAuth2LoginAuthenticationFilter`, `BearerTokenAuthenticationFilter`, `OAuth2AuthorizationServerFilter`) are Prototype Beams implementing Rays' `BeamPrototypeWithContext` interface.
 > 
 > When you invoke `.With(OAuth2Login)...And()`, `.With(OAuth2ResourceServer)...And()`, or `.With(OAuth2AuthorizationServer)...And()`, the configurer registers the filter's configuration into `HttpSecurity` via `AddCustomSecurityFilter(name, cfg)`.
 > 

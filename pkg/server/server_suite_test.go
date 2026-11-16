@@ -139,13 +139,33 @@ var _ = Describe("RegisteredClientBuilder", func() {
 		Expect(first.AccessTokenTimeToLive).To(Equal(time.Duration(0)))
 		Expect(first.RefreshTokenTimeToLive).To(Equal(time.Duration(0)))
 
-		// Further builder mutations should not alter previously built RegisteredClient.
-		builder.Scope("profile").RedirectURI("https://spa.example.com/cb2")
+		// Mutating existing elements on one built client must not affect another built client or subsequent builds.
 		second := builder.Build()
-		Expect(first.Scopes).To(Equal([]string{"openid"}))
-		Expect(first.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb"}))
-		Expect(second.Scopes).To(Equal([]string{"openid", "profile"}))
-		Expect(second.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb", "https://spa.example.com/cb2"}))
+		first.ClientAuthenticationMethods[0] = ClientAuthMethodBasic
+		first.AuthorizationGrantTypes[0] = GrantTypeClientCredentials
+		first.RedirectURIs[0] = "https://mutated.example.com/cb"
+		first.Scopes[0] = "mutated"
+
+		Expect(second.ClientAuthenticationMethods).To(Equal([]ClientAuthenticationMethod{ClientAuthMethodNone}))
+		Expect(second.AuthorizationGrantTypes).To(Equal([]AuthorizationGrantType{GrantTypeAuthorizationCode}))
+		Expect(second.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb"}))
+		Expect(second.Scopes).To(Equal([]string{"openid"}))
+
+		third := builder.Build()
+		Expect(third.ClientAuthenticationMethods).To(Equal([]ClientAuthenticationMethod{ClientAuthMethodNone}))
+		Expect(third.AuthorizationGrantTypes).To(Equal([]AuthorizationGrantType{GrantTypeAuthorizationCode}))
+		Expect(third.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb"}))
+		Expect(third.Scopes).To(Equal([]string{"openid"}))
+
+		// Further builder mutations should not alter previously built RegisteredClient instances.
+		builder.Scope("profile").RedirectURI("https://spa.example.com/cb2")
+		fourth := builder.Build()
+		Expect(second.Scopes).To(Equal([]string{"openid"}))
+		Expect(second.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb"}))
+		Expect(third.Scopes).To(Equal([]string{"openid"}))
+		Expect(third.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb"}))
+		Expect(fourth.Scopes).To(Equal([]string{"openid", "profile"}))
+		Expect(fourth.RedirectURIs).To(Equal([]string{"https://spa.example.com/cb", "https://spa.example.com/cb2"}))
 
 		// Minimal client keeps non-nil empty slices.
 		minimal := NewRegisteredClient("min-1").Build()

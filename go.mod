@@ -3,7 +3,7 @@ module github.com/BeamFoundry/rays-web-security-oauth2
 go 1.27
 
 require (
-	github.com/BeamFoundry/rays v0.4.0
+	github.com/BeamFoundry/rays v0.4.2
 	github.com/BeamFoundry/rays-web-security v0.3.0
 	github.com/lestrrat-go/httprc/v3 v3.0.6
 	github.com/lestrrat-go/jwx/v3 v3.4.0

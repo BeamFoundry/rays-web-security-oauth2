@@ -54,7 +54,7 @@ var (
 	_, _                              = any(&OAuth2AuthorizationServerFilter{}).(Stereotype)
 	_    SecurityFilter               = &OAuth2AuthorizationServerFilter{}
 	_    SecurityEndpointRegistration = &OAuth2AuthorizationServerFilter{}
-	_    BeamPostConstructWithContext = &OAuth2AuthorizationServerFilter{}
+	_    BeamPrototypeWithContext     = &OAuth2AuthorizationServerFilter{}
 
 	randRead    = rand.Read
 	jsonMarshal = json.Marshal
@@ -105,7 +105,7 @@ func (this *OAuth2AuthorizationServerFilter) Config() *OAuth2AuthorizationServer
 	return this.config
 }
 
-// WithContext implements BeamPostConstructWithContext for prototype injection into HttpSecurity
+// WithContext implements BeamPrototypeWithContext for prototype injection into HttpSecurity
 func (this *OAuth2AuthorizationServerFilter) WithContext(ctx context.Context) Error {
 	if s, ok := this.injectedSettings.Get(); ok {
 		this.settings = s

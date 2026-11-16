@@ -1114,7 +1114,7 @@ You no longer need to pre-initialize a local `builder := &HttpSecurityBuilder{}`
 
 ### Prototype SecurityFilter Lifecycle
 
-Custom security filters (`OAuth2LoginAuthenticationFilter`, `BearerTokenAuthenticationFilter`, `OAuth2AuthorizationServerFilter`) are Prototype Beams implementing Rays' `BeamPostConstructWithContext` interface.
+Custom security filters (`OAuth2LoginAuthenticationFilter`, `BearerTokenAuthenticationFilter`, `OAuth2AuthorizationServerFilter`) are Prototype Beams implementing Rays' `BeamPrototypeWithContext` interface.
 
 When you invoke `.With(OAuth2Login)...And()`, `.With(OAuth2ResourceServer)...And()`, or `.With(OAuth2AuthorizationServer)...And()`, the configurer registers the filter's configuration into `HttpSecurity` via `AddCustomSecurityFilter(name, cfg)`.
 

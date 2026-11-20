@@ -8,6 +8,8 @@ github.com/BeamFoundry/rays v0.4.2 h1:Xx1O9/uV30j7RyjywmFClKDRozCtK6DFrEu0FR6qFz
 github.com/BeamFoundry/rays v0.4.2/go.mod h1:t7DZl4+V9yYsWRFHeWlgGDdvMafJjIWHBN0rhkwDnhI=
 github.com/BeamFoundry/rays v0.5.0-rc1 h1:fkdbDFPcJBJ9h4+otX5NRbYmsM99ZejkTgEjskLQpFo=
 github.com/BeamFoundry/rays v0.5.0-rc1/go.mod h1:TVthNFJp7AcpbfVqyZ1yELaf///Dy3HVrz2l9nHyctU=
+github.com/BeamFoundry/rays v0.5.0-rc2 h1:CcClNDNIx/kkciCWTwW2fzjeP+BseXkTHMK5xHq8geo=
+github.com/BeamFoundry/rays v0.5.0-rc2/go.mod h1:TVthNFJp7AcpbfVqyZ1yELaf///Dy3HVrz2l9nHyctU=
 github.com/BeamFoundry/rays-web-security v0.3.0 h1:4Q/97fBt+GQ4fU8X/0EabBSmWOwomCbeUzd1smpWG8E=
 github.com/BeamFoundry/rays-web-security v0.3.0/go.mod h1:owEXQjb45i4VvzxSPinzGy1AVMygAkUgWereBL4rrSM=
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=

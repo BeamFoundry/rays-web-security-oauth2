@@ -9,7 +9,7 @@ require (
 	github.com/lestrrat-go/jwx/v3 v3.4.0
 	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.44.0
-	github.com/stillya/testcontainers-keycloak v0.3.8
+	github.com/stillya/testcontainers-keycloak v0.3.9
 	github.com/testcontainers/testcontainers-go v0.45.0
 	golang.org/x/sync v0.25.0
 )
